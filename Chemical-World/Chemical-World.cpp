@@ -1,5 +1,6 @@
-﻿// Chemical-world.cpp - 翻新版（含高炉界面）
+﻿// Chemical-world.cpp
 // 使用 FTXUI 6.1.9 实现图形界面
+// 特别警告：目前 !!!游戏内容!!! 请使用全英文+基础ascii以避免乱码，注释可以使用中文
 
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/screen.hpp>
@@ -112,6 +113,12 @@ private:
     bool isRunning = false;
     int progress = 0;
     int maxProgress = 100;
+    int temperature = 20;
+    int targetTemperature = 1400;
+    int temperatureTolerance = 75;
+    int heatTime = 0;
+    int requiredHeatTime = 5000;
+    bool loaded = false;
     string currentRecipe = "";
     int fuelCount = 0;
     int oreCount = 0;
@@ -120,6 +127,7 @@ private:
 
     struct Recipe {
         string name;
+        string oreName;
         string result;
         int oreRequired;
         int fuelRequired;
@@ -128,13 +136,18 @@ private:
     };
 
     vector<Recipe> recipes = {
-        {"Steel Making", "steel", 2, 1, 1, 5},
-        {"Iron Smelting", "iron_ingot", 1, 1, 2, 3},
-        {"Glass Making", "glass", 2, 1, 1, 4},
-        {"Alloy Production", "alloy", 3, 2, 1, 8}
+        {"Steel Making", "hematite", "steel", 2, 1, 1, 5},
+        {"Steel Making", "magnetite", "steel", 2, 1, 1, 5},
+        {"Aluminum Smelting", "bauxite", "aluminum", 2, 1, 1, 5},
+        {"Tin Smelting", "cassiterite", "tin", 2, 1, 1, 5},
+        {"Copper Smelting", "malachite", "copper", 2, 1, 1, 5},
+        {"Copper Smelting", "chalcopyrite", "copper", 2, 1, 1, 5},
+        {"Gold Smelting", "gold_ore", "gold_ingot", 2, 1, 1, 5},
+        {"Silver Smelting", "silver_ore", "silver_ingot", 2, 1, 1, 5}
     };
 
     int selectedRecipe = 0;
+    int loadedRecipe = 0;
 
 public:
     BlastFurnace() {}
@@ -146,7 +159,10 @@ public:
 
     string getStatus() {
         if (isRunning) {
-            return " working... " + to_string(progress) + "%";
+            if (!loaded) return "ready to load";
+            if (temperature > targetTemperature + temperatureTolerance) return "OVERHEATED";
+            if (temperature >= targetTemperature - temperatureTolerance) return "holding temperature";
+            return "heating - use blower";
         }
         return "free";
     }
@@ -154,9 +170,15 @@ public:
     int getProgress() { return progress; }
     int getMaxProgress() { return maxProgress; }
     bool isActive() { return isRunning; }
+    int getTemperature() { return temperature; }
+    int getTargetTemperature() { return targetTemperature; }
+    int getTemperatureTolerance() { return temperatureTolerance; }
+    int getHeatTime() { return heatTime; }
+    int getRequiredHeatTime() { return requiredHeatTime; }
+    bool isLoaded() { return loaded; }
 
     void selectRecipe(int index) {
-        if (index >= 0 && index < (int)recipes.size()) {
+        if (!isRunning && index >= 0 && index < (int)recipes.size()) {
             selectedRecipe = index;
         }
     }
@@ -167,48 +189,104 @@ public:
 
     string getRecipeInfo() {
         Recipe& r = recipes[selectedRecipe];
-        return r.name + ": " + to_string(r.oreRequired) + " ores + " +
+        return r.name + " (" + r.oreName + "): " + to_string(r.oreRequired) + " ore + " +
             to_string(r.fuelRequired) + " fuel -> " + r.result + " x" + to_string(r.resultAmount);
     }
 
-    bool canStart(PlayerData& player) {
+    bool canLoad(PlayerData& player) {
         Recipe& r = recipes[selectedRecipe];
         return !isRunning &&
-            player.hasItem("iron_ore", r.oreRequired) &&
+            player.hasItem(r.oreName, r.oreRequired) &&
             player.hasItem("coal", r.fuelRequired);
     }
 
-    void start(PlayerData& player) {
+    int findRecipe(const string& oreName, int oreAmount, int fuelAmount) {
+        for (int i = 0; i < (int)recipes.size(); ++i) {
+            Recipe& r = recipes[i];
+            if (r.oreName == oreName && r.oreRequired == oreAmount &&
+                r.fuelRequired == fuelAmount) return i;
+        }
+        return -1;
+    }
+
+    bool canLoad(PlayerData& player, const string& oreName, int oreAmount, int fuelAmount) {
+        return !isRunning && findRecipe(oreName, oreAmount, fuelAmount) >= 0 &&
+            player.hasItem(oreName, oreAmount) && player.hasItem("coal", fuelAmount);
+    }
+
+    void loadMaterials(PlayerData& player) {
         if (isRunning) return;
         Recipe& r = recipes[selectedRecipe];
-        if (!canStart(player)) {
+        if (!canLoad(player)) {
             addLog("X NOT ENOUGH MATERIALS");
             return;
         }
 
-        player.removeItem("iron_ore", r.oreRequired);
+        player.removeItem(r.oreName, r.oreRequired);
         player.removeItem("coal", r.fuelRequired);
 
         isRunning = true;
+        loaded = true;
         progress = 0;
+        temperature = 200;
+        heatTime = 0;
         currentRecipe = r.name;
+        loadedRecipe = selectedRecipe;
         oreCount = r.oreRequired;
         fuelCount = r.fuelRequired;
         resultCount = r.resultAmount;
 
-        addLog("start " + r.name + ", need " + to_string(r.duration) + "s");
+        addLog("Loaded " + to_string(r.oreRequired) + " ore and " +
+            to_string(r.fuelRequired) + " coal. Start blowing air!");
     }
 
-    bool update(PlayerData& player) {
-        if (!isRunning) return false;
+    bool loadMaterials(PlayerData& player, const string& oreName, int oreAmount, int fuelAmount) {
+        int recipeIndex = findRecipe(oreName, oreAmount, fuelAmount);
+        if (isRunning || recipeIndex < 0 || !player.hasItem(oreName, oreAmount) ||
+            !player.hasItem("coal", fuelAmount)) {
+            addLog("X Charge does not match any recipe or materials are missing.");
+            return false;
+        }
+        selectedRecipe = recipeIndex;
+        loadMaterials(player);
+        return true;
+    }
 
-        progress += 2; // 每帧增加2%
-        if (progress >= maxProgress) {
-            // 完成冶炼
+    bool canStart(PlayerData& player) { return canLoad(player); }
+    void start(PlayerData& player) { loadMaterials(player); }
+
+    bool blowAir() {
+        if (!isRunning || !loaded) return false;
+        temperature = min(1800, temperature + 90);
+        return true;
+    }
+
+    bool update(PlayerData& player, int elapsedMs = 100) {
+        if (!isRunning || !loaded) return false;
+
+        temperature = max(20, temperature - 12);
+        if (temperature > targetTemperature + temperatureTolerance) {
             isRunning = false;
-            progress = 100;
+            loaded = false;
+            progress = 0;
+            temperature = 20;
+            addLog("X Furnace overheated! The batch was lost.");
+            return false;
+        }
 
-            Recipe& r = recipes[selectedRecipe];
+        if (temperature >= targetTemperature - temperatureTolerance &&
+            temperature <= targetTemperature + temperatureTolerance) {
+            heatTime += elapsedMs;
+            progress = min(maxProgress, heatTime * maxProgress / requiredHeatTime);
+        }
+
+        if (heatTime >= requiredHeatTime) {
+            isRunning = false;
+            loaded = false;
+            progress = 100;
+            temperature = 20;
+
+            Recipe& r = recipes[loadedRecipe];
             player.addItem(r.result, resultCount, "product", 20);
             player.exp += 15;
             addLog("OK! " + r.name + " completed! You got " + r.result + " x" + to_string(resultCount));
@@ -230,17 +308,19 @@ public:
     void cancel() {
         if (isRunning) {
             isRunning = false;
+            loaded = false;
             progress = 0;
+            temperature = 20;
             addLog("Smelting cancelled");
         }
     }
-
+    
     vector<string> getLogs() { return logs; }
 
     vector<string> getRecipeList() {
         vector<string> result;
         for (auto& r : recipes) {
-            result.push_back(r.name + " (" + r.result + " x" + to_string(r.resultAmount) + ")");
+            result.push_back(r.name + " [" + r.oreName + "] -> " + r.result + " x" + to_string(r.resultAmount));
         }
         return result;
     }
@@ -255,6 +335,9 @@ struct Tile {
     string description;
     bool passable;
     int color;
+    string mineral;
+    int richness = 0;
+    int hits = 0;
 };
 
 class GameMap {
@@ -267,52 +350,33 @@ public:
     GameMap() {
         for (int y = 0; y < MAP_HEIGHT; y++) {
             for (int x = 0; x < MAP_WIDTH; x++) {
-                tiles[y][x] = { '.', "Grass", "A green grassland", true, COLOR_GREEN };
+                tiles[y][x] = { '.', "Stone", "Undiscovered ground", true, COLOR_GREY };
             }
         }
+        
+        vector<pair<string, char>> mineralTypes = {
+            {"hematite", 'H'}, {"magnetite", 'M'}, {"bauxite", 'B'},
+            {"coal", 'C'}, {"cassiterite", 'T'}, {"malachite", 'P'},
+            {"chalcopyrite", 'U'}, {"gold_ore", 'G'}, {"silver_ore", 'S'}
+        };
 
-        // 添加树木
-        for (int i = 0; i < 15; i++) {
-            int tx = rand() % MAP_WIDTH;
-            int ty = rand() % MAP_HEIGHT;
-            if (!(tx == 5 && ty == 5)) {
-                tiles[ty][tx] = { 'T', "Tree", "A tall tree", false, COLOR_DARK_GREEN };
-            }
-        }
-
-        // 添加石头
-        for (int i = 0; i < 8; i++) {
-            int tx = rand() % MAP_WIDTH;
-            int ty = rand() % MAP_HEIGHT;
-            if (tiles[ty][tx].display == '.') {
-                tiles[ty][tx] = { 'S', "Stone", "A hard rock", false, COLOR_GREY };
-            }
-        }
-
-        // 添加水源
-        for (int i = 0; i < 5; i++) {
-            int tx = rand() % MAP_WIDTH;
-            int ty = rand() % MAP_HEIGHT;
-            if (tiles[ty][tx].display == '.') {
-                tiles[ty][tx] = { '~', "Water Source", "Clear water source", true, COLOR_BLUE };
-            }
-        }
-
-        // 添加铁矿
-        for (int i = 0; i < 6; i++) {
-            int tx = rand() % MAP_WIDTH;
-            int ty = rand() % MAP_HEIGHT;
-            if (tiles[ty][tx].display == '.') {
-                tiles[ty][tx] = { 'F', "Iron Ore", "Iron ore outcrop", true, COLOR_DARK_RED };
-            }
-        }
-
-        // 添加煤矿
-        for (int i = 0; i < 5; i++) {
-            int tx = rand() % MAP_WIDTH;
-            int ty = rand() % MAP_HEIGHT;
-            if (tiles[ty][tx].display == '.') {
-                tiles[ty][tx] = { 'C', "Coal", "Coal outcrop", true, COLOR_DARK_YELLOW };
+        // 生成隐藏矿点。矿脉会向相邻方向延伸，表面仍然显示为灰色点。
+        for (int vein = 0; vein < 18; ++vein) {
+            int x = rand() % MAP_WIDTH;
+            int y = rand() % MAP_HEIGHT;
+            auto mineral = mineralTypes[rand() % mineralTypes.size()];
+            int richness = rand() % 3 + 1;
+            int length = rand() % 3 + 1;
+            for (int i = 0; i < length; ++i) {
+                if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT &&
+                    tiles[y][x].mineral.empty()) {
+                    tiles[y][x].mineral = mineral.first;
+                    tiles[y][x].display = '.';
+                    tiles[y][x].name = "Hidden Deposit";
+                    tiles[y][x].richness = richness;
+                }
+                if (rand() % 2 == 0) x += rand() % 3 - 1;
+                else y += rand() % 3 - 1;
             }
         }
 
@@ -331,43 +395,61 @@ public:
         return getTile(x, y).passable;
     }
 
+    bool mineAt(PlayerData& player, int x, int y) {
+        Tile& tile = getTile(x, y);
+        // No mineral here
+        if (tile.mineral.empty()) return false;
+
+        // If hidden (default display '.'), first strike exposes the deposit
+        if (tile.display == '.') {
+            // Map mineral name to its intended display symbol (matching generation map)
+            static std::map<std::string, char> symbols = {
+                {"hematite", 'H'}, {"magnetite", 'M'}, {"bauxite", 'B'},
+                {"coal", 'C'}, {"cassiterite", 'T'}, {"malachite", 'P'},
+                {"chalcopyrite", 'U'}, {"gold_ore", 'G'}, {"silver_ore", 'S'}
+            };
+            char hint = '.';
+            auto it = symbols.find(tile.mineral);
+            if (it != symbols.end()) hint = it->second;
+            else if (!tile.mineral.empty()) hint = toupper(tile.mineral[0]);
+
+            tile.display = hint;
+            tile.hits = 1;
+            tile.name = tile.mineral; // expose proper name
+            cout << " You exposed a deposit: " << tile.mineral << " (" << tile.hits << "/3)." << endl;
+            return true;
+        }
+
+        // Subsequent strikes accumulate hits; third strike yields ore based on richness
+        tile.hits++;
+        cout << " You strike the " << tile.mineral << " (" << tile.hits << "/3)." << endl;
+        if (tile.hits == 2) {
+            cout << " Cracks spread across the ore." << endl;
+        }
+
+        if (tile.hits >= 3) {
+            int amount = (tile.richness == 1) ? 1 : (tile.richness == 2 ? 2 : 4);
+            player.addItem(tile.mineral, amount, "ore", 5);
+            cout << " Mined " << tile.mineral << " x" << amount << "!" << endl;
+
+            // Reset tile to empty ground
+            tile.mineral.clear();
+            tile.display = '.';
+            tile.name = "Stone";
+            tile.description = "Empty ground";
+            tile.hits = 0;
+            tile.richness = 0;
+        }
+        return true;
+    }
+
     int getWidth() const { return MAP_WIDTH; }
     int getHeight() const { return MAP_HEIGHT; }
 
     void interact(PlayerData& player, int x, int y) {
         Tile& tile = getTile(x, y);
-        if (tile.display == '~') {
-            setcolor(COLOR_BLUE);
-            cout << " You came to the water source, drank some water, and regained energy!" << endl;
-            setcolor(COLOR_RESET);
-        }
-        else if (tile.display == 'F') {
-            setcolor(COLOR_DARK_RED);
-            int qty = rand() % 3 + 1;
-            player.addItem("iron_ore", qty, "ore", 5);
-            cout << " You mined " << qty << " units of iron ore!" << endl;
-            setcolor(COLOR_RESET);
-        }
-        else if (tile.display == 'C') {
-            setcolor(COLOR_DARK_YELLOW);
-            int qty = rand() % 3 + 1;
-            player.addItem("coal", qty, "fuel", 8);
-            cout << " You mined " << qty << " units of coal!" << endl;
-            setcolor(COLOR_RESET);
-        }
-        else if (tile.display == 'S') {
-            setcolor(COLOR_GREY);
-            cout << " This is a large rock, you can't move it." << endl;
-            setcolor(COLOR_RESET);
-        }
-        else if (tile.display == 'T') {
-            setcolor(COLOR_DARK_GREEN);
-            cout << " This is a big tree blocking the way." << endl;
-            setcolor(COLOR_RESET);
-        }
-        else {
-            cout << " There's nothing here." << endl;
-        }
+        cout << (tile.mineral.empty() ? " Nothing to interact with." :
+            " Use WASD to strike this deposit three times.") << endl;
     }
 };
 
@@ -382,7 +464,12 @@ private:
 
     Component mainContainer;
     Component recipeList;
-    Component buttonStart;
+    Component buttonLoad;
+    Component buttonBlower;
+    Component buttonOreMinus;
+    Component buttonOrePlus;
+    Component buttonFuelMinus;
+    Component buttonFuelPlus;
     Component buttonCancel;
     Component buttonClose;
     Component progressBar;
@@ -390,8 +477,11 @@ private:
 
     // 保持配方列表的生命周期，使 Radiobox 引用有效
     std::vector<std::string> recipeNames;
+    std::vector<std::string> inputNames;
 
-    int selectedRecipe = 0;
+    int selectedInput = 0;
+    int oreQuantity = 2;
+    int fuelQuantity = 1;
     bool needRefresh = false;
 
 public:
@@ -402,32 +492,46 @@ public:
 
     void setupUI() {
         // 创建配方列表 - 使用 Radiobox
-        recipeNames = furnace.getRecipeList();
-        recipeList = Radiobox(&recipeNames, &selectedRecipe);
+        inputNames = { "hematite", "magnetite", "bauxite", "cassiterite",
+            "malachite", "chalcopyrite", "gold_ore", "silver_ore" };
+        recipeList = Radiobox(&inputNames, &selectedInput);
 
         // 绑定选择事件
         recipeList |= CatchEvent([&](Event event) {
             if (event == Event::ArrowUp || event == Event::ArrowDown) {
-                furnace.selectRecipe(selectedRecipe);
                 needRefresh = true;
                 return true;
             }
             return false;
             });
 
-        // 开始按钮
-        buttonStart = Button("START", [&] {
-            if (furnace.canStart(player)) {
-                furnace.start(player);
-                statusMessage = "It starts!";
+        buttonLoad = Button("LOAD MATERIALS", [&] {
+            if (furnace.canLoad(player, inputNames[selectedInput], oreQuantity, fuelQuantity)) {
+                furnace.loadMaterials(player, inputNames[selectedInput], oreQuantity, fuelQuantity);
+                statusMessage = "Charge loaded. Keep the temperature in the green zone!";
                 needRefresh = true;
             }
             else {
-                statusMessage = "Not enough materials!";
+                statusMessage = "Need the selected recipe's ore and coal.";
                 needRefresh = true;
             }
             });
 
+        buttonOreMinus = Button("ORE -", [&] { oreQuantity = max(1, oreQuantity - 1); });
+        buttonOrePlus = Button("ORE +", [&] { oreQuantity = min(8, oreQuantity + 1); });
+        buttonFuelMinus = Button("COAL -", [&] { fuelQuantity = max(1, fuelQuantity - 1); });
+        buttonFuelPlus = Button("COAL +", [&] { fuelQuantity = min(8, fuelQuantity + 1); });
+
+        buttonBlower = Button("BLOW AIR", [&] {
+            if (furnace.blowAir()) {
+                statusMessage = "Whoosh! Temperature increased.";
+            }
+            else {
+                statusMessage = "Load materials before using the blower.";
+            }
+            needRefresh = true;
+            });
+        
         // 取消按钮
         buttonCancel = Button("CANCEL", [&] {
             furnace.cancel();
@@ -448,23 +552,17 @@ public:
             int filled = (prog * 20) / maxProg;
 
             string bar = "[";
-            for (int i = 0; i < 20; i++) {
-                if (i < filled) bar += "O";
-                else if (i == filled && prog > 0 && prog < maxProg) bar += "X";
-                else bar += "o";
+            for (int i = 0; i < 30; i++) {
+                if (i < (prog * 30) / maxProg) bar += "#";
+                else bar += ".";
             }
             bar += "]";
 
             string statusText = furnace.isActive() ? "..." : "|| free";
             string percent = to_string(prog) + "%";
 
-            return hbox({
-                text(bar),
-                text(""),
-                text(statusText),
-                text(""),
-                text(percent)
-                });
+            return hbox({ text("  "), text(bar) | color(Color::Green),
+                text("  "), text(statusText) | bold, text("  "), text(percent) });
             });
 
         // 日志查看器
@@ -485,7 +583,10 @@ public:
             Container::Horizontal({
                 recipeList,
                 Container::Vertical({
-                    buttonStart,
+                    Container::Horizontal({ buttonOreMinus, buttonOrePlus }),
+                    Container::Horizontal({ buttonFuelMinus, buttonFuelPlus }),
+                    buttonLoad,
+                    buttonBlower,
                     buttonCancel,
                     buttonClose,
                 }),
@@ -496,24 +597,33 @@ public:
 
         mainContainer = Renderer(layout, [&] {
             // 获取当前配方信息
-            string recipeName = furnace.getRecipeName();
-            string recipeInfo = furnace.getRecipeInfo();
+            string recipeName = inputNames[selectedInput];
+            string recipeInfo = "Charge: " + recipeName + " x" + to_string(oreQuantity) +
+                " + coal x" + to_string(fuelQuantity);
             string status = furnace.getStatus();
 
             // 库存信息
-            int ironOre = player.getItemCount("iron_ore");
+            int selectedOre = player.getItemCount(recipeName);
             int coal = player.getItemCount("coal");
             int steel = player.getItemCount("steel");
+            int temperature = furnace.getTemperature();
+            int target = furnace.getTargetTemperature();
+            int tolerance = furnace.getTemperatureTolerance();
+            string temperatureText = to_string(temperature) + " C   target " +
+                to_string(target - tolerance) + " - " + to_string(target + tolerance) + " C";
+            Color temperatureColor = temperature > target + tolerance ? Color::Red :
+                (temperature >= target - tolerance ? Color::Green : Color::Yellow);
+            string heatText = to_string(furnace.getHeatTime() / 1000) + " / " +
+                to_string(furnace.getRequiredHeatTime() / 1000) + " sec";
 
             return vbox({
-                // 标题
-                text(" ") | bold | color(Color::Yellow),
+                text("        BLAST FURNACE  //  CONTROL DECK") | bold | color(Color::Yellow),
                 separator(),
 
                 // 状态和配方信息
                 hbox({
                     text("Status: ") | bold,
-                    text(status) | color(furnace.isActive() ? Color::Red : Color::GrayDark),
+                    text(status) | bold | color(furnace.isActive() ? Color::Cyan : Color::GrayDark),
                 }),
                 hbox({
                     text("Current Recipe: ") | bold,
@@ -525,21 +635,28 @@ public:
                 }),
                 separator(),
 
-                // 库存信息
-                hbox({
-                    text(" Inventory: "),
-                    text("Iron Ore: " + to_string(ironOre)),
-                    text(" Coal: " + to_string(coal)),
-                    text(" Steel: " + to_string(steel)),
-                }),
+                hbox({ text(" CHARGE  ") | bold | color(Color::Magenta),
+                    text(recipeName + "  ") | color(Color::Red), text(to_string(selectedOre) + "   "),
+                    text("Coal  ") | color(Color::Yellow), text(to_string(coal) + "   "),
+                    text("Steel  ") | color(Color::Cyan), text(to_string(steel)) }),
                 separator(),
 
-                // 进度条
+                hbox({ text(" TEMPERATURE  ") | bold, text(temperatureText) | color(temperatureColor) }),
+                gauge(static_cast<float>(min(temperature, 1800)) / 1800.0f) |
+                    color(temperatureColor) | border,
+                hbox({ text(" HOLD TIME     ") | bold, text(heatText),
+                    text(furnace.isLoaded() ? "   Keep clicking BLOW AIR" : "   Load a batch to begin") |
+                        color(Color::GrayDark) }),
                 progressBar->Render() | border,
 
-                // 操作按钮
                 hbox({
-                    buttonStart->Render() | flex,
+                    text(" INPUT: ") | bold,
+                    text(recipeName + " x" + to_string(oreQuantity) + "  +  coal x" +
+                        to_string(fuelQuantity)) | color(Color::Magenta),
+                }),
+                hbox({
+                    buttonLoad->Render() | flex,
+                    buttonBlower->Render() | flex,
                     buttonCancel->Render() | flex,
                     buttonClose->Render() | flex,
                 }),
@@ -547,12 +664,25 @@ public:
                 separator(),
 
                 // 日志
-                text(" Logs:") | bold,
+                text(" EVENT LOG") | bold | color(Color::Yellow),
                 logViewer->Render() | flex,
 
                 // 消息
                 text(statusMessage) | color(Color::Yellow),
-                }) | border | size(WIDTH, GREATER_THAN, 60);
+                text("Tip: temperature cools continuously. Green means the batch is being refined.") |
+                    color(Color::GrayDark),
+                }) | border | size(WIDTH, GREATER_THAN, 78);
+            });
+
+        mainContainer |= CatchEvent([&](Event event) {
+            if (event == Event::Custom) {
+                if (furnace.update(player)) {
+                    statusMessage = "Steel is ready! Batch completed.";
+                }
+                needRefresh = true;
+                return true;
+            }
+            return false;
             });
     }
 
@@ -587,10 +717,11 @@ private:
         bool completed = false;
     };
 
+
     vector<TutorialStep> tutorials = {
         {"Move & Explore", "Use WASD keys to move on the map\nTry moving to nearby water sources or mining spots", "move", false},
-        {"Collect Resources", "Move to ore (F/C) and press E to collect\nTry mining some iron ore and coal first", "collect", false},
-        {"Craft Items", "Press C to open the crafting menu\nTry crafting steel (Iron Ore x2 + Coal x1)", "craft", false},
+        {"Collect Resources", "Move into a hidden deposit and strike it 3 times with WASD\nFind hematite, magnetite, or coal first", "collect", false},
+        {"Craft Items", "Press C to open the crafting menu\nTry crafting steel (Hematite x2 + Coal x1)", "craft", false},
         {"Trading System", "Press T to open the trading menu\nSell your steel for coins", "trade", false},
         {"Blast Furnace", "Press F to open the furnace interface\nSmelt metals using ores and coal", "furnace", false}
     };
@@ -619,7 +750,7 @@ private:
 
     // 合成系统
     void craft() {
-        vector<string> options = { "Steel (Iron Ore x2 + Coal x1)", "Glass (Sand x2 + Coal x1)", "Back" };
+        vector<string> options = { "Steel (Hematite x2 + Coal x1)", "Glass (Sand x2 + Coal x1)", "Back" };
         int selected = 0;
         bool crafting = true;
 
@@ -643,7 +774,7 @@ private:
             }
 
             cout << "\nInventory:\n";
-            cout << "  Iron Ore: " << player.getItemCount("iron_ore") << "\n";
+            cout << "  Hematite: " << player.getItemCount("hematite") << "\n";
             cout << "  Coal: " << player.getItemCount("coal") << "\n";
             cout << "  Sand: " << player.getItemCount("sand") << "\n";
             cout << "\n[UP][DOWN] Select, [ENTER] Confirm, [ESC] Back\n";
@@ -659,8 +790,8 @@ private:
             }
             else if (key == 13) {
                 if (selected == 0) {
-                    if (player.hasItem("iron_ore", 2) && player.hasItem("coal", 1)) {
-                        player.removeItem("iron_ore", 2);
+                    if (player.hasItem("hematite", 2) && player.hasItem("coal", 1)) {
+                        player.removeItem("hematite", 2);
                         player.removeItem("coal", 1);
                         player.addItem("steel", 1, "product", 30);
                         player.exp += 10;
@@ -670,7 +801,7 @@ private:
                         crafting = false;
                     }
                     else {
-                        message = "X Not enough materials! Need Iron Ore x2 + Coal x1";
+                        message = "X Not enough materials! Need Hematite x2 + Coal x1";
                     }
                 }
                 else if (selected == 1) {
@@ -776,7 +907,9 @@ private:
 
     int getItemPrice(const string& item) {
         static map<string, int> prices = {
-            {"water", 3}, {"iron_ore", 5}, {"coal", 8},
+            {"water", 3}, {"hematite", 5}, {"magnetite", 5}, {"bauxite", 4},
+            {"cassiterite", 5}, {"malachite", 6}, {"chalcopyrite", 6},
+            {"gold_ore", 20}, {"silver_ore", 12}, {"coal", 8},
             {"steel", 30}, {"glass", 15}, {"sand", 2},
             {"iron_ingot", 12}, {"alloy", 45}
         };
@@ -807,8 +940,21 @@ private:
         auto screen = ScreenInteractive::Fullscreen();
         FurnaceUI furnaceUI(furnace, player, screen);
 
+        thread furnaceTicker([&]() {
+            while (furnaceUI.isRunning()) {
+                this_thread::sleep_for(chrono::milliseconds(100));
+                if (furnaceUI.isRunning()) {
+                    screen.PostEvent(Event::Custom);
+                }
+            }
+            });
+
         // 运行界面
         screen.Loop(furnaceUI.getComponent());
+
+        if (furnaceTicker.joinable()) {
+            furnaceTicker.join();
+        }
 
         // 恢复光标
         cursorInfo.bVisible = true;
@@ -866,7 +1012,9 @@ private:
         setcolor(COLOR_BLUE);
         cout << "~=Water ";
         setcolor(COLOR_DARK_RED);
-        cout << "F=Iron Ore ";
+        cout << "H=Hematite M=Magnetite B=Bauxite ";
+        cout << "T=Cassiterite P=Malachite U=Chalcopyrite ";
+        cout << "G=Gold A=Silver ";
         setcolor(COLOR_DARK_YELLOW);
         cout << "C=Coal\n";
         setcolor(COLOR_RESET);
@@ -972,6 +1120,11 @@ private:
             return;
         }
 
+        if (gameMap.mineAt(player, newX, newY)) {
+            message = "Mining deposit: strike " + to_string(gameMap.getTile(newX, newY).hits) + "/3";
+            return;
+        }
+
         if (gameMap.isPassable(newX, newY)) {
             player.x = newX;
             player.y = newY;
@@ -987,19 +1140,8 @@ public:
     void run() {
         player.name = "Chemist";
         player.addItem("water", 5, "basic", 3);
-        player.addItem("iron_ore", 5, "ore", 5);
         player.addItem("coal", 3, "fuel", 8);
         player.addItem("sand", 3, "material", 2);
-
-        // 高炉后台更新线程
-        thread furnaceThread([&]() {
-            while (running) {
-                if (furnace.isActive()) {
-                    furnace.update(player);
-                }
-                this_thread::sleep_for(chrono::milliseconds(100));
-            }
-            });
 
         while (running) {
             cls();
@@ -1030,9 +1172,6 @@ public:
         }
 
         running = false;
-        if (furnaceThread.joinable()) {
-            furnaceThread.join();
-        }
 
         cls();
         setcolor(COLOR_YELLOW);
