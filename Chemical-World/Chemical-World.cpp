@@ -17,6 +17,7 @@
 #include <conio.h>
 #include <stdio.h>
 #include <map>
+#include <set>
 #include <ctime>
 #include <random>
 #include <thread>
@@ -125,6 +126,7 @@ int itemPrice(const string& name) {
 }
 
 // ======================== 高炉系统 ========================
+class PowerNetwork;  // 前向声明：BlastFurnace/Lathe 引用 PowerNetwork*
 class BlastFurnace {
 private:
     bool isRunning = false;
@@ -141,6 +143,8 @@ private:
     int oreCount = 0;
     int resultCount = 0;
     vector<string> logs;
+    PowerNetwork* powerNet = nullptr;   // 电力网络（null=引导期免费）
+    int gx = 0, gy = 0;                  // 本机器在地图上的坐标
 
     struct Recipe {
         string name;
@@ -210,12 +214,12 @@ public:
             to_string(r.fuelRequired) + " fuel -> " + r.result + " x" + to_string(r.resultAmount);
     }
 
-    bool canLoad(PlayerData& player) {
-        Recipe& r = recipes[selectedRecipe];
-        return !isRunning &&
-            player.hasItem(r.oreName, r.oreRequired) &&
-            player.hasItem("coal", r.fuelRequired);
-    }
+    bool canLoad(PlayerData& player);
+
+    void setPowerNet(PowerNetwork* net, int x, int y) { powerNet = net; gx = x; gy = y; }
+
+    // 仅查电力（UI 提示用，区分 "No power" vs "缺料"）
+    bool canLoadPower();
 
     int findRecipe(const string& oreName, int oreAmount, int fuelAmount) {
         for (int i = 0; i < (int)recipes.size(); ++i) {
@@ -366,6 +370,8 @@ private:
     vector<string> logs;
     vector<vector<string>> insertFrames;     // 5 帧滑入动画
     vector<vector<string>> machiningFrames;  // 4 帧加工循环
+    PowerNetwork* powerNet = nullptr;   // 电力网络（null=引导期免费）
+    int gx = 0, gy = 0;                  // 本机器在地图上的坐标
 
     struct Mold {
         string name;            // "Gear" — Radiobox 显示
@@ -443,16 +449,18 @@ public:
         if (index >= 0 && index < (int)molds.size()) selectedMold = index;
     }
 
+    void setPowerNet(PowerNetwork* net, int x, int y) { powerNet = net; gx = x; gy = y; }
+
+    // 仅查电力（UI 提示用，区分 "No power" vs "缺料"）
+    bool canLoadPower();
+
     // 循环切换到下一个模具（SELECT 按钮用）
     void selectNextMold() {
         if (animState != Idle) return;
         selectedMold = (selectedMold + 1) % (int)molds.size();
     }
 
-    bool canLoad(PlayerData& player) {
-        if (animState != Idle) return false;
-        return player.hasItem("steel", molds[selectedMold].steelRequired);
-    }
+    bool canLoad(PlayerData& player);
 
     void loadMaterials(PlayerData& player) {
         if (animState != Idle) return;
@@ -581,6 +589,8 @@ struct Tile {
     string mineral;
     int richness = 0;
     int hits = 0;
+    char pipe = 0;   // 0=无管道, 'p'=有管道（可走过）
+    char wire = 0;   // 0=无电线, 'w'=有电线（可走过）
 };
 
 enum class Area { Home, Wasteland, Cave };
@@ -639,6 +649,17 @@ public:
             tiles[8][5] = { 'L', "Lathe", "Machining facility", false, COLOR_PURPLE };
             tiles[6][5] = { '.', "Grass", "Home grass", true, COLOR_GREEN };
             tiles[7][5] = { '.', "Grass", "Home grass", true, COLOR_GREEN };
+            // 河流与湖泊：远离 F(5,5)/L(5,8)/car(12,5)/spawn(8,5)
+            // 湖泊在右下 (40-44, 30-34)
+            for (int y = 30; y <= 34; ++y)
+                for (int x = 40; x <= 44; ++x)
+                    tiles[y][x] = { '~', "Water", "River source", false, COLOR_BLUE };
+            // 河流：从湖蜿蜒向左上到地图边
+            int rx = 40, ry = 30;
+            while (rx > 2 && ry > 2) {
+                tiles[ry][rx] = { '~', "Water", "River", false, COLOR_BLUE };
+                if (rand() % 2) rx--; else ry--;
+            }
         }
         else if (area == Area::Wasteland) {
             fill(150, 80, { '.', "Wasteland", "Dry ground", true, COLOR_DARK_YELLOW });
@@ -726,12 +747,14 @@ public:
             for (int x = 0; x < width; ++x) {
                 const Tile& tile = tiles[y][x];
                 output << tile.display << ' ' << (tile.mineral.empty() ? "-" : tile.mineral) << ' ' << tile.richness << ' '
-                    << tile.hits << ' ' << tile.color << '\n';
+                    << tile.hits << ' ' << tile.color << ' '
+                    << (int)(unsigned char)tile.pipe << ' ' << (int)(unsigned char)tile.wire << ' '
+                    << (tile.passable ? 1 : 0) << '\n';
             }
         }
     }
 
-    bool load(istream& input) {
+    bool load(istream& input, int version) {
         int width = 0;
         int height = 0;
         if (!(input >> width >> height) || width <= 0 || height <= 0) return false;
@@ -742,8 +765,19 @@ public:
                 string mineral;
                 if (!(input >> tile.display >> mineral >> tile.richness >> tile.hits >> tile.color)) return false;
                 tile.mineral = mineral == "-" ? "" : mineral;
-                tile.passable = tile.display != '=' && tile.display != 't'
-                    && tile.display != 'F' && tile.display != 'L';
+                if (version >= 3) {
+                    int pipeI = 0, wireI = 0, passableI = 0;
+                    if (!(input >> pipeI >> wireI >> passableI)) return false;
+                    tile.pipe = (char)pipeI;
+                    tile.wire = (char)wireI;
+                    tile.passable = passableI != 0;
+                }
+                else {
+                    tile.pipe = 0;
+                    tile.wire = 0;
+                    tile.passable = tile.display != '=' && tile.display != 't'
+                        && tile.display != 'F' && tile.display != 'L';
+                }
                 tile.name = tile.mineral.empty() ? "Stone" : tile.mineral;
                 tile.description = tile.mineral.empty() ? "Empty ground" : "Mineral deposit";
             }
@@ -828,7 +862,8 @@ public:
                 needRefresh = true;
             }
             else {
-                statusMessage = "Need the selected recipe's ore and coal.";
+                if (!furnace.canLoadPower()) statusMessage = "No power! Connect a generator.";
+                else statusMessage = "Need the selected recipe's ore and coal.";
                 needRefresh = true;
             }
             });
@@ -1092,7 +1127,8 @@ public:
                 statusMessage = "Steel sliding in...";
             }
             else {
-                statusMessage = "Need steel for this mold.";
+                if (!lathe.canLoadPower()) statusMessage = "No power! Connect a generator.";
+                else statusMessage = "Need steel for this mold.";
             }
             needRefresh = true;
             });
@@ -1410,7 +1446,7 @@ public:
                 separator(),
                 price > 0 ? text("  Sellable.") | color(Color::Green)
                           : text("  Not sellable here.") | color(Color::Red),
-            }) | border | size(WIDTH, GREATER_THAN, 36);
+                }) | border | size(WIDTH, GREATER_THAN, 36);
             });
 
         auto layout = Container::Vertical({
@@ -1423,7 +1459,7 @@ public:
                     buttonClose,
                 }),
             }),
-        });
+            });
 
         mainContainer = Renderer(layout, [&] {
             return vbox({
@@ -1450,7 +1486,556 @@ public:
                 separator(),
                 text(statusMessage) | color(Color::Green),
                 text("Tip: UP/DOWN select, SELL ONE/ALL for one item, SELL EVERYTHING clears all sellables.") | color(Color::GrayDark),
-            }) | border | size(WIDTH, GREATER_THAN, 78);
+                }) | border | size(WIDTH, GREATER_THAN, 78);
+            });
+    }
+
+    Component getComponent() { return mainContainer; }
+    bool isRunning() { return running; }
+};
+
+// ======================== 电力 / 水路 网络 ========================
+// 真实电网：发电机+电线做 BFS 连通分量，按 genSum vs demandSum 判定通电。
+// 水网：管道做 BFS 连通分量，分量含 '~' 水源或邻水的 'K' 泵则该分量有水。
+// 引导期：generators 为空时 hasPower 恒 true（避免没电没法炼钢、没钢没法建发电机）。
+struct Generator {
+    int x = 0, y = 0;
+    int waterLevel = 0;   // 0..100
+    int coalLevel = 0;    // 0..100
+    int maxOutput = 100;
+    int tickAccumMs = 0;  // 用于煤炭/水消耗速率
+};
+
+struct Pump {
+    int x = 0, y = 0;
+};
+
+class PowerNetwork {
+private:
+    GameMap* mapPtr = nullptr;
+    vector<Generator> generators;
+    vector<Pump> pumps;
+    map<pair<int, int>, bool> poweredMap;      // 消费者 (x,y)->通电
+    set<pair<int, int>> wateredPipeCells;       // 有水的管道格
+
+    static bool inBounds(int x, int y) { return x >= 0 && y >= 0; }
+
+    bool pumpAdjacentToWater(int x, int y) const {
+        if (!mapPtr) return false;
+        static const int dx[4] = { 1,-1,0,0 };
+        static const int dy[4] = { 0,0,1,-1 };
+        for (int i = 0; i < 4; ++i) {
+            const Tile& t = mapPtr->getTile(x + dx[i], y + dy[i]);
+            if (t.display == '~') return true;
+        }
+        return false;
+    }
+
+    int demandOf(char display) const {
+        if (display == 'F') return 50;   // Blast Furnace
+        if (display == 'L') return 30;   // Lathe
+        return 0;
+    }
+
+public:
+    void bind(GameMap& m) { mapPtr = &m; }
+
+    bool hasGenerators() const { return !generators.empty(); }
+
+    // generators 为空 = 引导期，F/L 免费运行
+    bool hasPower(int x, int y) const {
+        if (generators.empty()) return true;
+        auto it = poweredMap.find({ x, y });
+        return it != poweredMap.end() ? it->second : false;
+    }
+
+    bool hasWater(int x, int y) const {
+        return wateredPipeCells.count({ x, y }) > 0;
+    }
+
+    void recompute() {
+        poweredMap.clear();
+        wateredPipeCells.clear();
+        if (!mapPtr || mapPtr->getArea() != Area::Home) return;
+        int W = 60, H = 50;  // Home 地图尺寸
+
+        // ---- 水网 BFS：管道连通分量 ----
+        vector<vector<bool>> visited(H, vector<bool>(W, false));
+        for (int sy = 0; sy < H; ++sy) {
+            for (int sx = 0; sx < W; ++sx) {
+                if (mapPtr->getTile(sx, sy).pipe == 0 || visited[sy][sx]) continue;
+                vector<pair<int, int>> component;
+                vector<pair<int, int>> stack = { {sx, sy} };
+                visited[sy][sx] = true;
+                while (!stack.empty()) {
+                    auto [cx, cy] = stack.back(); stack.pop_back();
+                    component.push_back({ cx, cy });
+                    static const int dx[4] = { 1,-1,0,0 };
+                    static const int dy[4] = { 0,0,1,-1 };
+                    for (int i = 0; i < 4; ++i) {
+                        int nx = cx + dx[i], ny = cy + dy[i];
+                        if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+                        if (visited[ny][nx]) continue;
+                        if (mapPtr->getTile(nx, ny).pipe != 0) {
+                            visited[ny][nx] = true;
+                            stack.push_back({ nx, ny });
+                        }
+                    }
+                }
+                // 分量是否有水：某管道格邻 '~'，或格上有 'K' 且泵邻水
+                bool wet = false;
+                for (auto& [px, py] : component) {
+                    const Tile& t = mapPtr->getTile(px, py);
+                    if (t.display == 'K' && pumpAdjacentToWater(px, py)) { wet = true; break; }
+                    static const int dx[4] = { 1,-1,0,0 };
+                    static const int dy[4] = { 0,0,1,-1 };
+                    for (int i = 0; i < 4; ++i) {
+                        if (mapPtr->getTile(px + dx[i], py + dy[i]).display == '~') { wet = true; break; }
+                    }
+                    if (wet) break;
+                }
+                if (wet) for (auto& c : component) wateredPipeCells.insert(c);
+            }
+        }
+
+        // ---- 电网 BFS：电线连通分量 ----
+        vector<vector<bool>> visited2(H, vector<bool>(W, false));
+        for (int sy = 0; sy < H; ++sy) {
+            for (int sx = 0; sx < W; ++sx) {
+                if (mapPtr->getTile(sx, sy).wire == 0 || visited2[sy][sx]) continue;
+                vector<pair<int, int>> component;
+                vector<pair<int, int>> stack = { {sx, sy} };
+                visited2[sy][sx] = true;
+                while (!stack.empty()) {
+                    auto [cx, cy] = stack.back(); stack.pop_back();
+                    component.push_back({ cx, cy });
+                    static const int dx[4] = { 1,-1,0,0 };
+                    static const int dy[4] = { 0,0,1,-1 };
+                    for (int i = 0; i < 4; ++i) {
+                        int nx = cx + dx[i], ny = cy + dy[i];
+                        if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+                        if (visited2[ny][nx]) continue;
+                        if (mapPtr->getTile(nx, ny).wire != 0) {
+                            visited2[ny][nx] = true;
+                            stack.push_back({ nx, ny });
+                        }
+                    }
+                }
+                // 累加发电与耗电
+                int genSum = 0, demandSum = 0;
+                vector<pair<int, int>> consumers;
+                for (auto& [px, py] : component) {
+                    const Tile& t = mapPtr->getTile(px, py);
+                    if (t.display == 'G') {
+                        Generator* g = generatorAt(px, py);
+                        if (g && g->waterLevel > 0 && g->coalLevel > 0 && hasWater(px, py)) {
+                            genSum += g->maxOutput;
+                        }
+                    }
+                    int d = demandOf(t.display);
+                    if (d > 0) { demandSum += d; consumers.push_back({ px, py }); }
+                }
+                bool powered = genSum >= demandSum;
+                for (auto& c : consumers) poweredMap[c] = powered;
+            }
+        }
+    }
+
+    void tick(PlayerData& player, int elapsedMs = 100) {
+        for (auto& g : generators) {
+            g.tickAccumMs += elapsedMs;
+            int waterT = 0, coalT = 0;
+            while (g.tickAccumMs >= 100) {
+                g.tickAccumMs -= 100;
+                waterT++; coalT++;
+                if (waterT >= 30) { waterT = 0; g.waterLevel = max(0, g.waterLevel - 1); }
+                if (coalT >= 50) { coalT = 0; g.coalLevel = max(0, g.coalLevel - 1); }
+            }
+        }
+        recompute();
+    }
+
+    void placeGenerator(int x, int y) { generators.push_back({ x, y }); }
+    void placePump(int x, int y) { pumps.push_back({ x, y }); }
+
+    void removeMachine(int x, int y) {
+        generators.erase(remove_if(generators.begin(), generators.end(),
+            [&](const Generator& g) { return g.x == x && g.y == y; }), generators.end());
+        pumps.erase(remove_if(pumps.begin(), pumps.end(),
+            [&](const Pump& p) { return p.x == x && p.y == y; }), pumps.end());
+    }
+
+    Generator* generatorAt(int x, int y) {
+        for (auto& g : generators) if (g.x == x && g.y == y) return &g;
+        return nullptr;
+    }
+
+    void clear() { generators.clear(); pumps.clear(); poweredMap.clear(); wateredPipeCells.clear(); }
+
+    vector<Generator>& getGenerators() { return generators; }
+
+    void save(ostream& out) const {
+        out << "POWER_NET " << generators.size() << ' ' << pumps.size() << '\n';
+        for (const auto& g : generators)
+            out << g.x << ' ' << g.y << ' ' << g.waterLevel << ' ' << g.coalLevel << '\n';
+        for (const auto& p : pumps)
+            out << p.x << ' ' << p.y << '\n';
+    }
+
+    bool load(istream& in, int version) {
+        clear();
+        if (version < 3) return true;  // v2 无此段
+        // v3：可选段，用 peek 判存在
+        if (in.peek() != 'P') { in.clear(); return true; }
+        string tag;
+        if (!(in >> tag) || tag != "POWER_NET") { in.clear(); return true; }
+        size_t genCount = 0, pumpCount = 0;
+        if (!(in >> genCount >> pumpCount)) return false;
+        for (size_t i = 0; i < genCount; ++i) {
+            Generator g;
+            if (!(in >> g.x >> g.y >> g.waterLevel >> g.coalLevel)) return false;
+            generators.push_back(g);
+        }
+        for (size_t i = 0; i < pumpCount; ++i) {
+            Pump p;
+            if (!(in >> p.x >> p.y)) return false;
+            pumps.push_back(p);
+        }
+        return true;
+    }
+};
+
+// ---- F/L 门控：延迟定义（PowerNetwork 此处已完整可见）----
+// BlastFurnace::canLoad / canLoadPower
+bool BlastFurnace::canLoad(PlayerData& player) {
+    Recipe& r = recipes[selectedRecipe];
+    return !isRunning &&
+        (powerNet == nullptr || powerNet->hasPower(gx, gy)) &&
+        player.hasItem(r.oreName, r.oreRequired) &&
+        player.hasItem("coal", r.fuelRequired);
+}
+bool BlastFurnace::canLoadPower() {
+    return powerNet == nullptr || powerNet->hasPower(gx, gy);
+}
+
+// Lathe::canLoad / canLoadPower
+bool Lathe::canLoad(PlayerData& player) {
+    if (animState != Idle) return false;
+    if (powerNet != nullptr && !powerNet->hasPower(gx, gy)) return false;
+    return player.hasItem("steel", molds[selectedMold].steelRequired);
+}
+bool Lathe::canLoadPower() {
+    return powerNet == nullptr || powerNet->hasPower(gx, gy);
+}
+
+// ======================== 建造 FTXUI 界面（B 键子图缩放）========================
+// 11×11 放大视图：每格 3 宽×2 高（顶行=管道/电线层标记，底行=地形/机器）。
+// 模式 Radiobox：Pipe/Wire/Generator/Pump/Remove/Exit（数字键 1-6 直选）。
+// 方向键移光标，Enter 放置；Generator 模式下光标在 'G' 上按 Enter 打开发电机面板。
+// 发电机面板与建造视图共用一个 ScreenInteractive + ticker 线程（简化首版）。
+class BuildUI {
+private:
+    GameMap& gameMap;
+    PowerNetwork& powerNet;
+    PlayerData& player;
+    ScreenInteractive& screen;
+    bool running = true;
+    string statusMessage = "BUILD: arrows=move, 1-6=mode, Enter=place, Q=close";
+
+    int cx, cy;            // 光标位置（独立于 player 坐标）
+    int selectedMode = 0;  // 0=Pipe 1=Wire 2=Generator 3=Pump 4=Remove 5=Exit
+
+    enum PanelMode { MapPanel, GeneratorPanel } panelMode = MapPanel;
+    int genX = 0, genY = 0;  // 当前打开发电机面板的机器坐标
+
+    Component mainContainer;
+    Component modeList;
+    Component buttonAddWater, buttonAddCoal, buttonGenClose;
+    Component mapRenderer;
+    Component infoBox;
+
+    std::vector<std::string> modes = { "Pipe", "Wire", "Generator", "Pump", "Remove", "Exit" };
+
+    // COLOR_* int -> FTXUI Color
+    static Color toColor(int c) {
+        switch (c) {
+        case COLOR_BLUE: return Color::Blue;
+        case COLOR_GREEN: return Color::Green;
+        case COLOR_CYAN: return Color::Cyan;
+        case COLOR_RED: return Color::Red;
+        case COLOR_YELLOW: return Color::Yellow;
+        case COLOR_GREY: return Color::GrayDark;
+        case COLOR_DARK_GREEN: return Color::DarkGreen;
+        case COLOR_DARK_RED: return Color::DarkRed;
+        case COLOR_DARK_YELLOW: return Color::YellowLight;
+        case COLOR_PURPLE: return Color::Magenta;
+        case COLOR_LIGHT_WHITE: return Color::White;
+        case COLOR_DARK_BLUE: return Color::DarkBlue;
+        case COLOR_DARK_CYAN: return Color::DarkCyan;
+        case COLOR_BLACK: return Color::Black;
+        default: return Color::White;
+        }
+    }
+
+    bool adjacentToWater(int x, int y) {
+        static const int dx[4] = { 1,-1,0,0 };
+        static const int dy[4] = { 0,0,1,-1 };
+        for (int i = 0; i < 4; ++i) {
+            if (gameMap.getTile(x + dx[i], y + dy[i]).display == '~') return true;
+        }
+        return false;
+    }
+
+    void placeAt(int x, int y) {
+        if (selectedMode == 5) { running = false; screen.ExitLoopClosure()(); return; }
+        Tile& t = gameMap.getTile(x, y);
+
+        if (selectedMode == 0) {  // Pipe
+            t.pipe = 'p';
+            powerNet.recompute();
+            statusMessage = "Pipe laid at (" + to_string(x) + "," + to_string(y) + ")";
+        }
+        else if (selectedMode == 1) {  // Wire
+            t.wire = 'w';
+            powerNet.recompute();
+            statusMessage = "Wire laid at (" + to_string(x) + "," + to_string(y) + ")";
+        }
+        else if (selectedMode == 2) {  // Generator
+            if (t.display == 'G') {
+                // 已有发电机 → 打开发电机面板
+                genX = x; genY = y; panelMode = GeneratorPanel;
+                buttonAddWater->TakeFocus();
+                statusMessage = "Generator panel opened.";
+                return;
+            }
+            if (x == player.x && y == player.y) { statusMessage = "Cannot build on your tile - move first."; return; }
+            if (!t.passable || t.display != '.') { statusMessage = "Need empty ground for generator."; return; }
+            if (!player.hasItem("steel", 5)) { statusMessage = "Need 5 steel for generator."; return; }
+            player.removeItem("steel", 5);
+            t.display = 'G'; t.name = "Generator"; t.passable = false; t.color = COLOR_YELLOW;
+            powerNet.placeGenerator(x, y);
+            powerNet.recompute();
+            statusMessage = "Generator placed! -5 steel. Add water+coal to start.";
+        }
+        else if (selectedMode == 3) {  // Pump
+            if (x == player.x && y == player.y) { statusMessage = "Cannot build on your tile - move first."; return; }
+            if (!t.passable || t.display != '.') { statusMessage = "Need empty ground for pump."; return; }
+            if (!adjacentToWater(x, y)) { statusMessage = "Pump must be adjacent to water (~)."; return; }
+            if (!player.hasItem("steel", 3)) { statusMessage = "Need 3 steel for pump."; return; }
+            player.removeItem("steel", 3);
+            t.display = 'K'; t.name = "Pump"; t.passable = false; t.color = COLOR_CYAN;
+            powerNet.placePump(x, y);
+            powerNet.recompute();
+            statusMessage = "Pump placed! -3 steel. It feeds adjacent pipes.";
+        }
+        else if (selectedMode == 4) {  // Remove
+            if (t.display == 'G' || t.display == 'K') {
+                powerNet.removeMachine(x, y);
+                t.display = '.'; t.name = "Grass"; t.passable = true; t.color = COLOR_GREEN;
+                powerNet.recompute();
+                statusMessage = "Machine removed at (" + to_string(x) + "," + to_string(y) + ") - no refund.";
+            }
+            else if (t.pipe != 0) { t.pipe = 0; powerNet.recompute(); statusMessage = "Pipe removed."; }
+            else if (t.wire != 0) { t.wire = 0; powerNet.recompute(); statusMessage = "Wire removed."; }
+            else { statusMessage = "Nothing to remove here."; }
+        }
+    }
+
+public:
+    BuildUI(GameMap& m, PowerNetwork& pn, PlayerData& p, ScreenInteractive& s, int startX, int startY)
+        : gameMap(m), powerNet(pn), player(p), screen(s), cx(startX), cy(startY) {
+        setupUI();
+    }
+
+    void setupUI() {
+        modeList = Radiobox(&modes, &selectedMode);
+
+        buttonAddWater = Button("ADD WATER", [&] {
+            Generator* g = powerNet.generatorAt(genX, genY);
+            if (!g) { panelMode = MapPanel; statusMessage = "Generator gone."; return; }
+            if (!player.hasItem("water", 1)) { statusMessage = "No water in inventory."; return; }
+            if (g->waterLevel >= 100) { statusMessage = "Water tank full."; return; }
+            player.removeItem("water", 1);
+            g->waterLevel = min(100, g->waterLevel + 25);
+            powerNet.recompute();
+            statusMessage = "+25 water. Tank at " + to_string(g->waterLevel) + "%";
+            });
+        buttonAddCoal = Button("ADD COAL", [&] {
+            Generator* g = powerNet.generatorAt(genX, genY);
+            if (!g) { panelMode = MapPanel; statusMessage = "Generator gone."; return; }
+            if (!player.hasItem("coal", 1)) { statusMessage = "No coal in inventory."; return; }
+            if (g->coalLevel >= 100) { statusMessage = "Coal hopper full."; return; }
+            player.removeItem("coal", 1);
+            g->coalLevel = min(100, g->coalLevel + 25);
+            powerNet.recompute();
+            statusMessage = "+25 coal. Hopper at " + to_string(g->coalLevel) + "%";
+            });
+        buttonGenClose = Button("CLOSE", [&] {
+            panelMode = MapPanel;
+            statusMessage = "Returned to build view.";
+            });
+
+        // 11×11 放大地图渲染器（以光标为中心，边界裁剪）
+        mapRenderer = Renderer([&] {
+            const int VIEW = 11;
+            int halfV = VIEW / 2;
+            int mapW = gameMap.getWidth();
+            int mapH = gameMap.getHeight();
+            int vx0 = (mapW <= VIEW) ? 0 : max(0, min(cx - halfV, mapW - VIEW));
+            int vy0 = (mapH <= VIEW) ? 0 : max(0, min(cy - halfV, mapH - VIEW));
+
+            Elements rows;
+            for (int dy = 0; dy < VIEW; ++dy) {
+                int y = vy0 + dy;
+                if (y >= mapH) break;
+                Elements topRow, botRow;
+                for (int dx = 0; dx < VIEW; ++dx) {
+                    int x = vx0 + dx;
+                    if (x >= mapW) {
+                        topRow.push_back(text("   "));
+                        botRow.push_back(text("   "));
+                        continue;
+                    }
+                    const Tile& t = gameMap.getTile(x, y);
+                    char pipeCh = t.pipe != 0 ? 'p' : '.';
+                    char wireCh = t.wire != 0 ? 'w' : '.';
+                    bool isCursor = (x == cx && y == cy);
+                    string top = string(1, pipeCh) + string(1, wireCh) + " ";
+                    string bot = isCursor
+                        ? string("[") + string(1, t.display) + string("]")
+                        : string(" ") + string(1, t.display) + string(" ");
+                    Element topElem = text(top) | color(Color::GrayDark);
+                    Element botElem = text(bot) | color(toColor(t.color));
+                    if (isCursor) botElem = botElem | bold;
+                    topRow.push_back(topElem);
+                    botRow.push_back(botElem);
+                }
+                rows.push_back(hbox(topRow));
+                rows.push_back(hbox(botRow));
+            }
+            return vbox({
+                text("BUILD VIEW  cursor: (" + to_string(cx) + "," + to_string(cy) + ")") | bold | color(Color::Cyan),
+                separator(),
+                vbox(rows),
+                }) | border | size(WIDTH, GREATER_THAN, 40);
+            });
+
+        // 信息面板（右侧：模式 + 当前格信息 + 库存 + 操作提示）
+        infoBox = Renderer([&] {
+            const Tile& t = gameMap.getTile(cx, cy);
+            string tileDesc = "Tile (" + to_string(cx) + "," + to_string(cy) + "): " + t.name;
+            string layerInfo = "Layers: pipe=" + string(t.pipe ? "Y" : "-") + " wire=" + string(t.wire ? "Y" : "-");
+            string cost = (selectedMode == 2) ? "Cost: 5 steel" :
+                (selectedMode == 3) ? "Cost: 3 steel" : "Cost: free";
+            int steel = player.getItemCount("steel");
+            int water = player.getItemCount("water");
+            int coal = player.getItemCount("coal");
+            return vbox({
+                text("MODE") | bold | color(Color::Yellow),
+                modeList->Render(),
+                separator(),
+                text(tileDesc),
+                text(layerInfo) | color(Color::GrayDark),
+                separator(),
+                hbox({ text("Steel: "), text(to_string(steel)) | color(Color::Cyan) }),
+                hbox({ text("Water: "), text(to_string(water)) | color(Color::Blue) }),
+                hbox({ text("Coal:  "), text(to_string(coal)) | color(Color::Yellow) }),
+                text(cost) | color(Color::Green),
+                separator(),
+                text("Controls:") | bold,
+                text("Arrows  - move cursor"),
+                text("1-6     - select mode"),
+                text("Enter   - place / open generator"),
+                text("Q       - close"),
+                });
+            });
+
+        auto showMap = [this] { return panelMode == MapPanel; };
+        auto showGen = [this] { return panelMode == GeneratorPanel; };
+
+        // 布局：MapPanel 仅 modeList 可聚焦（方向键被外层 CatchEvent 拦截，故只做显示）；
+        // GeneratorPanel 切到三按钮，TakeFocus 保证焦点平滑切换。
+        auto layout = Container::Vertical({
+            Maybe(modeList, showMap),
+            Maybe(buttonAddWater, showGen),
+            Maybe(buttonAddCoal, showGen),
+            Maybe(buttonGenClose, showGen),
+            });
+
+        mainContainer = Renderer(layout, [&] {
+            if (panelMode == GeneratorPanel) {
+                Generator* g = powerNet.generatorAt(genX, genY);
+                if (!g) {
+                    panelMode = MapPanel;  // 发电机被拆，回主视图
+                }
+                else {
+                    int wLvl = g->waterLevel, cLvl = g->coalLevel;
+                    int power = (wLvl > 0 && cLvl > 0) ? g->maxOutput : 0;
+                    bool hasWater = powerNet.hasWater(genX, genY);
+                    auto makeBar = [](const string& label, int val, int maxV, Color c) {
+                        int filled = (val * 20) / maxV;
+                        string bar = "[";
+                        for (int i = 0; i < 20; ++i) bar += (i < filled) ? '#' : '.';
+                        bar += "]";
+                        return hbox({ text(label + " "), text(bar) | color(c), text(" " + to_string(val) + "%") });
+                        };
+                    return vbox({
+                        text("GENERATOR AT (" + to_string(genX) + "," + to_string(genY) + ")") | bold | color(Color::Yellow),
+                        separator(),
+                        makeBar("WATER", wLvl, 100, Color::Blue),
+                        makeBar("COAL ", cLvl, 100, Color::Yellow),
+                        makeBar("POWER", power, 100, Color::Green),
+                        separator(),
+                        hbox({ text("Water supply: "),
+                              text(hasWater ? "CONNECTED" : "NO WATER") | color(hasWater ? Color::Green : Color::Red) }),
+                        separator(),
+                        hbox({ buttonAddWater->Render() | flex, buttonAddCoal->Render() | flex, buttonGenClose->Render() | flex }),
+                        text(statusMessage) | color(Color::Yellow),
+                        text("Tip: needs water+coal>0 to generate. Place pump near ~ and pipe to here.") | color(Color::GrayDark),
+                        }) | border | size(WIDTH, GREATER_THAN, 64);
+                }
+            }
+            // MapPanel 主视图
+            return vbox({
+                text("        BUILD  //  PLACE MACHINES & UTILITIES") | bold | color(Color::Yellow),
+                separator(),
+                hbox({ mapRenderer->Render() | flex, infoBox->Render() }),
+                separator(),
+                text(statusMessage) | color(Color::Yellow),
+                }) | border | size(WIDTH, GREATER_THAN, 78);
+            });
+
+        // 事件路由：Event::Custom 推进 tick；MapPanel 拦方向键/数字键/Enter；
+        // GeneratorPanel 放行给按钮（仅 Q/Esc 回主视图）。
+        mainContainer |= CatchEvent([&](Event event) {
+            if (event == Event::Custom) {
+                powerNet.tick(player, 100);
+                return true;
+            }
+            if (panelMode == GeneratorPanel) {
+                if (event == Event::Character("q") || event == Event::Character("Q") || event == Event::Escape) {
+                    panelMode = MapPanel;
+                    statusMessage = "Returned to build view.";
+                    return true;
+                }
+                return false;  // 放行给按钮（Tab/Enter）
+            }
+            // MapPanel
+            if (event == Event::ArrowUp) { cy = max(0, cy - 1); statusMessage = "Cursor: (" + to_string(cx) + "," + to_string(cy) + ")"; return true; }
+            if (event == Event::ArrowDown) { cy = min(gameMap.getHeight() - 1, cy + 1); statusMessage = "Cursor: (" + to_string(cx) + "," + to_string(cy) + ")"; return true; }
+            if (event == Event::ArrowLeft) { cx = max(0, cx - 1); statusMessage = "Cursor: (" + to_string(cx) + "," + to_string(cy) + ")"; return true; }
+            if (event == Event::ArrowRight) { cx = min(gameMap.getWidth() - 1, cx + 1); statusMessage = "Cursor: (" + to_string(cx) + "," + to_string(cy) + ")"; return true; }
+            if (event == Event::Character("1")) { selectedMode = 0; statusMessage = "Mode: Pipe"; return true; }
+            if (event == Event::Character("2")) { selectedMode = 1; statusMessage = "Mode: Wire"; return true; }
+            if (event == Event::Character("3")) { selectedMode = 2; statusMessage = "Mode: Generator"; return true; }
+            if (event == Event::Character("4")) { selectedMode = 3; statusMessage = "Mode: Pump"; return true; }
+            if (event == Event::Character("5")) { selectedMode = 4; statusMessage = "Mode: Remove"; return true; }
+            if (event == Event::Character("6")) { selectedMode = 5; statusMessage = "Mode: Exit"; return true; }
+            if (event == Event::Return || event == Event::Character(" ")) { placeAt(cx, cy); return true; }
+            if (event == Event::Character("q") || event == Event::Character("Q") || event == Event::Escape) {
+                running = false; screen.ExitLoopClosure()(); return true;
+            }
+            return false;
             });
     }
 
@@ -1465,6 +2050,7 @@ private:
     GameMap gameMap;
     BlastFurnace furnace;
     Lathe lathe;
+    PowerNetwork powerNet;
     Area currentArea = Area::Home;
     bool running = true;
     int activeSaveSlot = 1;
@@ -1496,7 +2082,7 @@ private:
     bool saveGame(int slot) {
         ofstream output(savePath(slot));
         if (!output) return false;
-        output << "CHEMICAL_WORLD_SAVE 2\n";
+        output << "CHEMICAL_WORLD_SAVE 3\n";
         output << player.name << '\n' << player.level << ' ' << player.coins << ' '
             << player.exp << ' ' << player.x << ' ' << player.y << '\n';
         output << static_cast<int>(currentArea) << '\n';
@@ -1507,6 +2093,7 @@ private:
         for (const auto& tutorial : tutorials) output << (tutorial.completed ? 1 : 0) << ' ';
         output << '\n';
         gameMap.save(output);
+        powerNet.save(output);
         return output.good();
     }
 
@@ -1514,7 +2101,7 @@ private:
         ifstream input(savePath(slot));
         string header;
         int version = 0;
-        if (!input || !(input >> header >> version) || header != "CHEMICAL_WORLD_SAVE" || version != 2) return false;
+        if (!input || !(input >> header >> version) || header != "CHEMICAL_WORLD_SAVE" || (version != 2 && version != 3)) return false;
         if (!(input >> player.name >> player.level >> player.coins >> player.exp >> player.x >> player.y)) return false;
         int savedArea = 0;
         if (!(input >> savedArea) || savedArea < 0 || savedArea > 2) return false;
@@ -1537,13 +2124,20 @@ private:
         tutorialActive = false;
         for (const auto& tutorial : tutorials) if (!tutorial.completed) tutorialActive = true;
         lathe = Lathe{};  // 读档后清空车床运行态（运行态不持久化，与高炉一致）
-        return gameMap.load(input);
+        bool ok = gameMap.load(input, version);
+        powerNet.bind(gameMap);
+        powerNet.load(input, version);
+        furnace.setPowerNet(&powerNet, 5, 5);
+        lathe.setPowerNet(&powerNet, 5, 8);
+        powerNet.recompute();
+        return ok;
     }
 
     void newGame() {
         player = PlayerData{};
         gameMap = GameMap{};
         furnace = BlastFurnace{};
+        lathe = Lathe{};
         currentArea = Area::Home;
         gameMap.generate(currentArea);
         player.x = 8;
@@ -1552,6 +2146,11 @@ private:
         player.addItem("water", 5, "basic", 3);
         player.addItem("coal", 3, "fuel", 8);
         player.addItem("sand", 3, "material", 2);
+        powerNet.clear();
+        powerNet.bind(gameMap);
+        furnace.setPowerNet(&powerNet, 5, 5);
+        lathe.setPowerNet(&powerNet, 5, 8);
+        powerNet.recompute();
         for (auto& tutorial : tutorials) tutorial.completed = false;
         tutorialActive = true;
         message = "Welcome to Chemical World!";
@@ -1829,6 +2428,12 @@ private:
         }
         currentArea = destination;
         gameMap.generate(currentArea);
+        // 旅行重生成地图会清掉玩家建造的管道/发电机；重新绑定网络并重算
+        powerNet.clear();
+        powerNet.bind(gameMap);
+        furnace.setPowerNet(&powerNet, 5, 5);
+        lathe.setPowerNet(&powerNet, 5, 8);
+        powerNet.recompute();
         if (destination == Area::Wasteland) {
             player.x = 4; player.y = 2;
             message = "Welcome to the wasteland. Find a cave entrance marked O.";
@@ -1841,6 +2446,7 @@ private:
 
     // 打开高炉UI（使用FTXUI）
     void openFurnaceUI() {
+        powerNet.recompute();  // 保证通电状态最新
         // 隐藏光标
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
         CONSOLE_CURSOR_INFO cursorInfo;
@@ -1879,6 +2485,7 @@ private:
 
     // 打开车床 UI（镜像 openFurnaceUI：隐光标→Fullscreen→ticker 线程→Loop→join→恢复光标）
     void openLatheUI() {
+        powerNet.recompute();  // 保证通电状态最新
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
         CONSOLE_CURSOR_INFO cursorInfo;
         GetConsoleCursorInfo(hConsole, &cursorInfo);
@@ -1908,6 +2515,43 @@ private:
 
         // 不调 checkTutorialProgress：避免新增教程步破坏旧存档（tutorialCount 守卫）
         message = "& Lathe operation complete!";
+        cls();
+    }
+
+    // 打开建造 UI（B 键：子图缩放放置机器/管道/电线 + 发电机面板）
+    // 镜像 openFurnaceUI/openLatheUI：隐光标→Fullscreen→ticker 线程 100ms PostEvent→Loop→join→复光标→cls。
+    // ticker 同时推进 powerNet.tick（发电机耗煤/水），符合「仅 UI 打开时 tick」的首版约定。
+    void openBuildUI() {
+        powerNet.recompute();  // 进 UI 前重算一次，通电状态最新
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        CONSOLE_CURSOR_INFO cursorInfo;
+        GetConsoleCursorInfo(hConsole, &cursorInfo);
+        cursorInfo.bVisible = false;
+        SetConsoleCursorInfo(hConsole, &cursorInfo);
+
+        auto screen = ScreenInteractive::Fullscreen();
+        BuildUI buildUI(gameMap, powerNet, player, screen, player.x, player.y);
+
+        thread buildTicker([&]() {
+            while (buildUI.isRunning()) {
+                this_thread::sleep_for(chrono::milliseconds(100));
+                if (buildUI.isRunning()) {
+                    screen.PostEvent(Event::Custom);
+                }
+            }
+            });
+
+        screen.Loop(buildUI.getComponent());
+
+        if (buildTicker.joinable()) {
+            buildTicker.join();
+        }
+
+        cursorInfo.bVisible = true;
+        SetConsoleCursorInfo(hConsole, &cursorInfo);
+
+        powerNet.recompute();  // 退出后再重算，主图门控状态最新
+        message = "& Build session ended.";
         cls();
     }
 
@@ -1962,7 +2606,7 @@ private:
         setcolor(COLOR_BLUE);
         cout << "~=Salt ~  ";
         cout << "=Rock ";
-        if (currentArea == Area::Home) cout << "F=Furnace L=Lathe C=Car a=Animal ";
+        if (currentArea == Area::Home) cout << "F=Furnace L=Lathe C=Car ~=Water G=Gen K=Pump B=Build ";
         else cout << "O=Cave entrance ";
         setcolor(COLOR_DARK_RED);
         cout << "H=Hematite M=Magnetite B=Bauxite ";
@@ -2036,6 +2680,7 @@ private:
         cout << "  C     - Crafting menu\n";
         cout << "  T     - Trading market\n";
         cout << "  F     - Hint only; use E beside furnace at home\n";
+        cout << "  B     - Build menu (home only): place generator/pump/pipes/wires\n";
         cout << "  H     - Show help\n";
         cout << "  F5    - Save to active manual slot\n";
         cout << "  F9    - Load active manual slot\n";
@@ -2102,6 +2747,10 @@ private:
         case 'f': case 'F':
             message = "Find the furnace at home and press E beside it.";
             return;
+        case 'b': case 'B':
+            if (currentArea == Area::Home) openBuildUI();
+            else message = "Build only at home.";
+            return;
         case 'h': case 'H':
             cls();
             showHelp();
@@ -2158,7 +2807,7 @@ public:
             showMessage();
 
             setcolor(COLOR_GREY);
-            cout << "\n  [WASD Move] [E Interact] [C Craft] [T Trade] [F Hint] [H Help] [F5 Save] [F9 Load] [Q Quit]\n";
+            cout << "\n  [WASD Move] [E Interact] [C Craft] [T Trade] [F Hint] [B Build] [H Help] [F5 Save] [F9 Load] [Q Quit]\n";
             setcolor(COLOR_RESET);
 
             int key = _getch();
@@ -2191,7 +2840,7 @@ public:
     }
 };
 
-// ======================== 主函数 ========================
+// ======================== main ========================
 int main() {
 
     srand((unsigned)time(nullptr));
@@ -2210,3 +2859,8 @@ int main() {
 
     return 0;
 }
+
+
+// ============== THE END ===================
+//                 鸣谢
+//               ??????????
