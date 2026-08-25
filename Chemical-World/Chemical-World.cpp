@@ -123,6 +123,8 @@ int itemPrice(const string& name) {
         // 金属锭（土高炉产物，之前漏了导致无法出售）
         {"aluminum", 15}, {"tin", 18}, {"copper", 20},
         {"gold_ingot", 60}, {"silver_ingot", 35},
+        // 合金锭（高炉合金冶炼产物）
+        {"bronze_ingot", 55}, {"electrum_ingot", 90},
         // 矿物处理链主产物（24 种）
         // 破碎矿石（crushed_*，破碎机产物）
         {"crushed_hematite", 8}, {"crushed_magnetite", 8}, {"crushed_bauxite", 8},
@@ -215,6 +217,8 @@ public:
         int fuelRequired;
         int resultAmount;
         int durationMs;
+        string oreName2;        // 合金第二输入（默认空 = 单输入配方）
+        int oreRequired2 = 0;
     };
 
 private:
@@ -241,7 +245,13 @@ private:
         {"Copper From Dust", "malachite_dust", "copper",      2, 1, 2, 30000},
         {"Copper From Dust", "chalcopyrite_dust","copper",    2, 1, 2, 30000},
         {"Gold From Dust",   "gold_dust",      "gold_ingot",  2, 1, 2, 30000},
-        {"Silver From Dust", "silver_dust",    "silver_ingot",2, 1, 2, 30000}
+        {"Silver From Dust", "silver_dust",    "silver_ingot",2, 1, 2, 30000},
+        // 合金冶炼：ingot 路径（基础产出）
+        {"Bronze Alloy",   "copper",     "bronze_ingot",  2, 1, 3, 30000, "tin", 1},
+        {"Electrum Alloy", "gold_ingot", "electrum_ingot",1, 1, 2, 30000, "silver_ingot", 1},
+        // 合金冶炼：dust 路径（×2 奖励，消费处理链产物；青铜用 malachite_dust 作铜源）
+        {"Bronze From Dust",  "malachite_dust", "bronze_ingot",  2, 1, 6, 30000, "cassiterite_dust", 1},
+        {"Electrum From Dust","gold_dust",      "electrum_ingot",1, 1, 4, 30000, "silver_dust", 1}
     };
 
     int computeFrame(Slot& s) const {
@@ -320,15 +330,17 @@ public:
     string getRecipeName() { return recipes[selectedRecipe].name; }
     string getRecipeInfo() {
         Recipe& r = recipes[selectedRecipe];
-        return r.name + " (" + r.oreName + "): " + to_string(r.oreRequired) + " ore + " +
-            to_string(r.fuelRequired) + " coal -> " + r.result + " x" +
+        return r.name + " (" + r.oreName + "): " + to_string(r.oreRequired) + " ore" +
+            (r.oreName2.empty() ? "" : " + " + to_string(r.oreRequired2) + " " + r.oreName2) +
+            " + " + to_string(r.fuelRequired) + " coal -> " + r.result + " x" +
             to_string(r.resultAmount) + "  [30s]";
     }
     vector<string> getRecipeList() {
         vector<string> res;
         for (auto& r : recipes)
-            res.push_back(r.name + " [" + r.oreName + "] -> " + r.result +
-                " x" + to_string(r.resultAmount) + " (30s)");
+            res.push_back(r.name + " [" + r.oreName + "]" +
+                (r.oreName2.empty() ? "" : " + " + r.oreName2 + " x" + to_string(r.oreRequired2)) +
+                " -> " + r.result + " x" + to_string(r.resultAmount) + " (30s)");
         return res;
     }
     int recipeCount() const { return (int)recipes.size(); }
@@ -339,8 +351,11 @@ public:
         if (s.phase != IDLE && s.phase != DONE) return false;
         Recipe& r = recipes[selectedRecipe];
         return player.hasItem(r.oreName, r.oreRequired) &&
-               player.hasItem("coal", r.fuelRequired);
+               player.hasItem("coal", r.fuelRequired) &&
+               (r.oreName2.empty() || player.hasItem(r.oreName2, r.oreRequired2));
     }
+    // LEGACY: 以下 3-arg/4-arg 重载均无外部调用，且不支持合金第二输入（oreName2）。
+    // 若日后启用，务必同步补上 oreName2 的校验/扣料，否则合金配方会漏扣第二原料。
     int findRecipe(const string& oreName, int oreAmt, int fuelAmt) {
         for (int i = 0; i < (int)recipes.size(); ++i) {
             Recipe& r = recipes[i];
@@ -368,6 +383,7 @@ public:
         }
         player.removeItem(r.oreName, r.oreRequired);
         player.removeItem("coal", r.fuelRequired);
+        if (!r.oreName2.empty()) player.removeItem(r.oreName2, r.oreRequired2);
         s.phase = STOKING;
         s.progressMs = 0;
         s.totalMs = r.durationMs;
@@ -377,6 +393,7 @@ public:
         s.resultCount = r.resultAmount;
         s.recipeIndex = selectedRecipe;
         addLog("Loaded " + to_string(r.oreRequired) + " " + r.oreName +
+               (r.oreName2.empty() ? "" : " + " + to_string(r.oreRequired2) + " " + r.oreName2) +
                " + " + to_string(r.fuelRequired) + " coal. 30s burn begins.");
     }
     bool loadMaterials(PlayerData& player, const string& oreName, int oreAmt, int fuelAmt) {
@@ -1089,6 +1106,25 @@ struct Tile {
 
 enum class Area { Home, Wasteland, Cave };
 
+// 多彩世界：Wasteland 子群系（8 种，默认 0 = 原粘土荒地）
+enum class WastelandBiome {
+    WASTELAND = 0,  // 粘土荒地（旧默认）
+    GRASSLAND,      // 草原
+    TUNDRA,         // 冰原
+    DESERT,         // 沙漠
+    FOREST,         // 森林
+    MEADOW,         // 草甸（花海）
+    OCEAN,          // 海洋
+    WETLAND         // 湿地
+};
+
+// 多彩世界：Cave 子类型（3 种，默认 0 = 原灰洞）
+enum class CaveType {
+    GREY_CAVE = 0,   // 灰岩洞（旧默认）
+    BROWN_KARST,     // 棕色溶洞
+    LUSH_CAVE        // 繁茂洞穴
+};
+
 class GameMap {
 private:
     int width = 60;
@@ -1130,121 +1166,140 @@ private:
 public:
     GameMap() { generate(Area::Home); }
 
-    void generate(Area newArea) {
-        area = newArea;
-        if (area == Area::Home) {
-            fill(60, 50, { '.', "Grass", "Home grass", true, COLOR_GREEN });
-            for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x)
-                if (rand() % 14 == 0) tiles[y][x] = { 't', "Tree", "Decoration", false, COLOR_DARK_GREEN };
-            // BlastFurnace 2×2（左上 (5,5)；大写主格红，辅格暗红，都不可踩）
-            tiles[5][5] = { 'F', "Blast Furnace", "Installed machine", false, COLOR_RED };
-            tiles[5][6] = { 'f', "Blast Furnace", "Installed machine", false, COLOR_DARK_RED };
-            tiles[6][5] = { 'f', "Blast Furnace", "Installed machine", false, COLOR_DARK_RED };
-            tiles[6][6] = { 'f', "Blast Furnace", "Installed machine", false, COLOR_DARK_RED };
-            tiles[5][12] = { 'C', "Car", "Travel to the wasteland", true, COLOR_YELLOW };
-            // Lathe 2×2（左上 (8,5)；紫/暗紫，都不可踩）
-            tiles[8][5] = { 'L', "Lathe", "Machining facility", false, COLOR_PURPLE };
-            tiles[8][6] = { 'l', "Lathe", "Machining facility", false, COLOR_DARK_PURPLE };
-            tiles[9][5] = { 'l', "Lathe", "Machining facility", false, COLOR_DARK_PURPLE };
-            tiles[9][6] = { 'l', "Lathe", "Machining facility", false, COLOR_DARK_PURPLE };
-            // 玩家出生格 (10,5)，在车床右下方，确保不站在机器上
-            tiles[10][5] = { '.', "Grass", "Home grass", true, COLOR_GREEN };
-
-            // ===== 家园装饰 =====
-            // 1) 河流：尝试几条不同方向的起点，找 >=10 连续格
-            {
-                int bestLen = 0;
-                int bestX = 15, bestY = 38;
-                int bestDir = 0;
-                for (int attempt = 0; attempt < 5; ++attempt) {
-                    int sx = 8 + rand() % (width - 12);
-                    int sy = 28 + rand() % (height - 32);
-                    for (int dir = 0; dir < 3; ++dir) {
-                        int len = 0;
-                        for (int step = 0; step < 15; ++step) {
-                            int x = sx + (dir == 0 ? step : (dir == 1 ? 0 : step));
-                            int y = sy + (dir == 1 ? step : (dir == 2 ? step : 0));
-                            if (x < 0 || x >= width || y < 0 || y >= height) break;
-                            if (tiles[y][x].display != '.') break;
-                            len++;
-                        }
-                        if (len > bestLen) { bestLen = len; bestX = sx; bestY = sy; bestDir = dir; }
+    // ====== 私有生成器（从 generate(Area) 拆出，保持旧行为）======
+private:
+    void genHome() {
+        fill(60, 50, { '.', "Grass", "Home grass", true, COLOR_GREEN });
+        for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x)
+            if (rand() % 14 == 0) tiles[y][x] = { 't', "Tree", "Decoration", false, COLOR_DARK_GREEN };
+        tiles[5][5] = { 'F', "Blast Furnace", "Installed machine", false, COLOR_RED };
+        tiles[5][6] = { 'f', "Blast Furnace", "Installed machine", false, COLOR_DARK_RED };
+        tiles[6][5] = { 'f', "Blast Furnace", "Installed machine", false, COLOR_DARK_RED };
+        tiles[6][6] = { 'f', "Blast Furnace", "Installed machine", false, COLOR_DARK_RED };
+        tiles[5][12] = { 'C', "Car", "Travel to the wasteland", true, COLOR_YELLOW };
+        tiles[8][5] = { 'L', "Lathe", "Machining facility", false, COLOR_PURPLE };
+        tiles[8][6] = { 'l', "Lathe", "Machining facility", false, COLOR_DARK_PURPLE };
+        tiles[9][5] = { 'l', "Lathe", "Machining facility", false, COLOR_DARK_PURPLE };
+        tiles[9][6] = { 'l', "Lathe", "Machining facility", false, COLOR_DARK_PURPLE };
+        tiles[10][5] = { '.', "Grass", "Home grass", true, COLOR_GREEN };
+        // 家园装饰：河流
+        {
+            int bestLen = 0, bestX = 15, bestY = 38, bestDir = 0;
+            for (int attempt = 0; attempt < 5; ++attempt) {
+                int sx = 8 + rand() % (width - 12);
+                int sy = 28 + rand() % (height - 32);
+                for (int dir = 0; dir < 3; ++dir) {
+                    int len = 0;
+                    for (int step = 0; step < 15; ++step) {
+                        int x = sx + (dir == 0 ? step : (dir == 1 ? 0 : step));
+                        int y = sy + (dir == 1 ? step : (dir == 2 ? step : 0));
+                        if (x < 0 || x >= width || y < 0 || y >= height) break;
+                        if (tiles[y][x].display != '.') break;
+                        len++;
                     }
-                }
-                for (int step = 0; step < max(10, bestLen); ++step) {
-                    int x = bestX + (bestDir == 0 ? step : (bestDir == 1 ? 0 : step));
-                    int y = bestY + (bestDir == 1 ? step : (bestDir == 2 ? step : 0));
-                    if (x >= 0 && x < width && y >= 0 && y < height && tiles[y][x].display == '.')
-                        tiles[y][x] = { '~', "River", "Flowing water", false, COLOR_BLUE };
+                    if (len > bestLen) { bestLen = len; bestX = sx; bestY = sy; bestDir = dir; }
                 }
             }
-            // 2) 湖泊：3×5 固定尺寸，位置在右下角远离开机器/出生
-            {
-                int tries = 0;
-                while (tries++ < 50) {
-                    int cx = 40 + rand() % 10;
-                    int cy = 32 + rand() % 8;
-                    bool ok = true;
-                    for (int dy = -1; dy <= 1; ++dy) for (int dx = -2; dx <= 2; ++dx) {
-                        int x = cx + dx, y = cy + dy;
-                        if (x < 0 || x >= width || y < 0 || y >= height) ok = false;
-                        else if (tiles[y][x].display != '.') ok = false;
-                    }
-                    if (ok) {
-                        for (int dy = -1; dy <= 1; ++dy) for (int dx = -2; dx <= 2; ++dx) {
-                            tiles[cy + dy][cx + dx] = { '~', "Lake", "Calm water", false, COLOR_DARK_CYAN };
-                        }
-                        break;
-                    }
-                }
+            for (int step = 0; step < max(10, bestLen); ++step) {
+                int x = bestX + (bestDir == 0 ? step : (bestDir == 1 ? 0 : step));
+                int y = bestY + (bestDir == 1 ? step : (bestDir == 2 ? step : 0));
+                if (x >= 0 && x < width && y >= 0 && y < height && tiles[y][x].display == '.')
+                    tiles[y][x] = { '~', "River", "Flowing water", false, COLOR_BLUE };
             }
-            // 3) 花：随机 40 朵，3 种颜色
-            {
-                int placed = 0, tries = 0;
-                while (placed < 40 && tries++ < 2000) {
-                    int x = rand() % width;
-                    int y = rand() % height;
-                    if (tiles[y][x].display != '.') continue;
-                    int c = COLOR_PURPLE;
-                    int r = rand() % 3;
-                    if (r == 0) c = COLOR_YELLOW;
-                    else if (r == 1) c = COLOR_GREEN;
-                    tiles[y][x] = { '*', "Flower", "Wild flower", true, c };
-                    placed++;
+        }
+        // 家园装饰：湖泊
+        {
+            int tries = 0;
+            while (tries++ < 50) {
+                int cx = 40 + rand() % 10;
+                int cy = 32 + rand() % 8;
+                bool ok = true;
+                for (int dy = -1; dy <= 1; ++dy) for (int dx = -2; dx <= 2; ++dx) {
+                    int x = cx + dx, y = cy + dy;
+                    if (x < 0 || x >= width || y < 0 || y >= height) ok = false;
+                    else if (tiles[y][x].display != '.') ok = false;
                 }
-            }
-            // 4) 草丛：随机 30 丛
-            {
-                int placed = 0, tries = 0;
-                while (placed < 30 && tries++ < 1500) {
-                    int x = rand() % width;
-                    int y = rand() % height;
-                    if (tiles[y][x].display != '.') continue;
-                    tiles[y][x] = { 'v', "Grass tuft", "Tall grass", true, COLOR_DARK_GREEN };
-                    placed++;
+                if (ok) {
+                    for (int dy = -1; dy <= 1; ++dy) for (int dx = -2; dx <= 2; ++dx)
+                        tiles[cy + dy][cx + dx] = { '~', "Lake", "Calm water", false, COLOR_DARK_CYAN };
+                    break;
                 }
             }
         }
-        else if (area == Area::Wasteland) {
-            fill(150, 80, { '.', "Wasteland", "Dry ground", true, COLOR_DARK_YELLOW });
-            for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x) {
-                if (rand() % 11 == 0) tiles[y][x] = { '=', "Rock", "Impassable rock", false, COLOR_GREY };
-                else if (rand() % 17 == 0) tiles[y][x] = { '~', "Salt Flats", "Pale biome", true, COLOR_LIGHT_WHITE };
-                else if (rand() % 19 == 0) tiles[y][x] = { '^', "Red Dunes", "Red dune biome", true, COLOR_RED };
+        // 家园装饰：花（40 朵）
+        {
+            int placed = 0, tries = 0;
+            while (placed < 40 && tries++ < 2000) {
+                int x = rand() % width, y = rand() % height;
+                if (tiles[y][x].display != '.') continue;
+                int c = COLOR_PURPLE, r = rand() % 3;
+                if (r == 0) c = COLOR_YELLOW;
+                else if (r == 1) c = COLOR_GREEN;
+                tiles[y][x] = { '*', "Flower", "Wild flower", true, c };
+                placed++;
             }
-            tiles[2][2] = { 'C', "Car", "Return to home", true, COLOR_YELLOW };
-            tiles[height / 2][width / 2] = { 'O', "Cave Entrance", "Enter cave", true, COLOR_CYAN };
-            placeMinerals(90);
         }
-        else {
-            fill(45, 28, { '.', "Cave Floor", "Cave floor", true, COLOR_GREY });
-            for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x)
-                if (x == 0 || y == 0 || x == width - 1 || y == height - 1 || rand() % 7 == 0)
-                    tiles[y][x] = { '=', "Rock", "Impassable rock", false, COLOR_GREY };
-            tiles[1][1] = { 'O', "Cave Exit", "Return to wasteland", true, COLOR_CYAN };
-            placeMinerals(35);
+        // 家园装饰：草丛（30 丛）
+        {
+            int placed = 0, tries = 0;
+            while (placed < 30 && tries++ < 1500) {
+                int x = rand() % width, y = rand() % height;
+                if (tiles[y][x].display != '.') continue;
+                tiles[y][x] = { 'v', "Grass tuft", "Tall grass", true, COLOR_DARK_GREEN };
+                placed++;
+            }
         }
     }
+
+    void genWastelandClassic() {
+        fill(150, 80, { '.', "Wasteland", "Dry ground", true, COLOR_DARK_YELLOW });
+        for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x) {
+            if (rand() % 11 == 0) tiles[y][x] = { '=', "Rock", "Impassable rock", false, COLOR_GREY };
+            else if (rand() % 17 == 0) tiles[y][x] = { '~', "Salt Flats", "Pale biome", true, COLOR_LIGHT_WHITE };
+            else if (rand() % 19 == 0) tiles[y][x] = { '^', "Red Dunes", "Red dune biome", true, COLOR_RED };
+        }
+        tiles[2][2] = { 'C', "Car", "Return to home", true, COLOR_YELLOW };
+        tiles[height / 2][width / 2] = { 'O', "Cave Entrance", "Enter cave", true, COLOR_CYAN };
+        placeMinerals(90);
+    }
+
+    void genCaveGrey() {
+        fill(45, 28, { '.', "Cave Floor", "Cave floor", true, COLOR_GREY });
+        for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x)
+            if (x == 0 || y == 0 || x == width - 1 || y == height - 1 || rand() % 7 == 0)
+                tiles[y][x] = { '=', "Rock", "Impassable rock", false, COLOR_GREY };
+        tiles[1][1] = { 'O', "Cave Exit", "Return to wasteland", true, COLOR_CYAN };
+        placeMinerals(35);
+    }
+
+    // 工具：确保 (x,y) 变成可通行沙地（COLOR_YELLOW '.'），以及其 3x3 中心（用于 C/O 不会踩水/踩岩）
+    // isOcean: 海洋群系把 3x3 变沙地；其他群系把 3x3 变主地板 '.'。
+    void ensureOpenArea(int cx, int cy, bool isOcean) {
+        Tile t = isOcean ? Tile{ '.', "Island sand", "Sandy patch", true, COLOR_YELLOW } :
+                          Tile{ '.', tiles[cy][cx].name, "Open ground", true, tiles[cy][cx].color };
+        for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) {
+            int x = cx + dx, y = cy + dy;
+            if (x < 1 || x >= width - 1 || y < 1 || y >= height - 1) continue;
+            tiles[y][x] = isOcean ? Tile{ '.', "Island sand", "Sandy patch", true, COLOR_YELLOW }
+                                  : tiles[y][x]; // 非海洋先保留原样；后面 stamp 主格时再覆盖
+        }
+        tiles[cy][cx] = t;
+    }
+
+public:
+    void generate(Area newArea) {
+        area = newArea;
+        if (area == Area::Home) genHome();
+        else if (area == Area::Wasteland) genWastelandClassic();
+        else genCaveGrey();
+    }
+
+    // 多彩世界：公开方法 —— 按子类型生成 Wasteland（保留 Area::Wasteland）
+    // 具体 8 种子群系实现在步骤 3 填充；先调用 Classic 默认实现作为占位。
+    void generateWasteland(WastelandBiome b);
+
+    // 多彩世界：公开方法 —— 按子类型生成 Cave（保留 Area::Cave）
+    void generateCave(CaveType t);
 
     Area getArea() const { return area; }
     bool isNear(int x, int y, char symbol, int px, int py) const {
@@ -1439,7 +1494,8 @@ public:
         for (int i = 0; i < furnace.recipeCount(); ++i) {
             auto& r = furnace.getRecipe(i);
             recipeNames.push_back(r.oreName + " (" + to_string(r.oreRequired) + "+c" +
-                                   to_string(r.fuelRequired) + " -> " + r.result + ")");
+                                   to_string(r.fuelRequired) + " -> " + r.result + ")" +
+                                   (r.oreName2.empty() ? "" : "+" + r.oreName2 + "x" + to_string(r.oreRequired2)));
         }
         int selRec = furnace.getSelectedRecipe();
         if (selRec < 0) selRec = 0;
@@ -1466,7 +1522,7 @@ public:
                 furnace.loadMaterials(player);
                 statusMessage = "Slot " + to_string(focusedSlotLocal) + " loaded. 30s timer started.";
             } else {
-                statusMessage = "Need recipe's ore + coal (check slot is idle).";
+                statusMessage = "Need recipe inputs + coal (check slot is idle).";
             }
         });
         buttonCancel = Button("CANCEL SLOT", [&] {
@@ -1546,9 +1602,11 @@ public:
 
             auto& r = furnace.getRecipe(furnace.getSelectedRecipe());
             string recipeInfo = r.name + " (" + r.oreName + " x" + to_string(r.oreRequired) +
+                                (r.oreName2.empty() ? "" : " + " + r.oreName2 + " x" + to_string(r.oreRequired2)) +
                                 " + coal x" + to_string(r.fuelRequired) + ") -> " + r.result + " x" +
                                 to_string(r.resultAmount) + "  [30s]";
             int oreCnt = player.getItemCount(r.oreName);
+            int ore2Cnt = r.oreName2.empty() ? 0 : player.getItemCount(r.oreName2);
             int coalCnt = player.getItemCount("coal");
             int steelCnt = player.getItemCount("steel");
 
@@ -1582,6 +1640,8 @@ public:
                 hbox({
                     text(" Bag: ") | bold,
                     text(r.oreName + " x" + to_string(oreCnt)) | color(Color::RedLight),
+                    text(r.oreName2.empty() ? "" :
+                         "   " + r.oreName2 + " x" + to_string(ore2Cnt)) | color(Color::RedLight),
                     text("   coal x" + to_string(coalCnt)) | color(Color::Yellow),
                     text("   steel x" + to_string(steelCnt)) | color(Color::Cyan),
                 }),
@@ -1888,13 +1948,13 @@ private:
     vector<int>    sellPrices;
 
     // ===== BUY tab data =====
-    // 固定条目：原材料 + 钢零件 + 蓝图（2 项）
+    // 固定条目：原材料 + 钢零件 + 蓝图（5 项：gen/wire/crusher/washer/centrifuge）
     struct BuyEntry {
         string label;       // Radiobox 文本
-        string itemName;    // 物品名（蓝图留空，看 isBlueprint）
+        string itemName;    // 物品名（蓝图留空，看 bpType）
         int buyPrice;       // 买入价（c）
-        bool isBlueprint = false;
-        bool genBlueprint = false;  // true=发电机蓝图 false=电线蓝图
+        string bpType;      // 空=非蓝图；"gen"/"wire"/"crusher"/"washer"/"centrifuge"
+        bool isBlueprint() const { return !bpType.empty(); }
     };
     vector<BuyEntry> buyEntries;
     // buyLabels 必须是类成员：Menu 组件和 Renderer 都要持有它的指针/引用，
@@ -1903,6 +1963,9 @@ private:
 
     bool& genBPUnlocked;
     bool& wireBPUnlocked;
+    bool& crusherBPUnlocked;
+    bool& washerBPUnlocked;
+    bool& centrifugeBPUnlocked;
 
     void rebuildSell() {
         sellEntries.clear(); sellNames.clear(); sellQty.clear(); sellPrices.clear();
@@ -1933,7 +1996,7 @@ private:
             int base = itemPrice(n);
             int bp = base * 3;
             if (bp <= 0) bp = 10;
-            buyEntries.push_back({ "  " + n + "   [" + to_string(bp) + "c]   x1", n, bp, false, false });
+            buyEntries.push_back({ "  " + n + "   [" + to_string(bp) + "c]   x1", n, bp, "", });
         }
         // 2. 钢零件
         vector<string> partNames = { "steel_gear","steel_rod","steel_plate","steel_spring",
@@ -1941,18 +2004,22 @@ private:
         for (auto& n : partNames) {
             int base = itemPrice(n);
             int bp = max(base * 3, 30);
-            buyEntries.push_back({ "  " + n + "   [" + to_string(bp) + "c]   x1", n, bp, false, false });
+            buyEntries.push_back({ "  " + n + "   [" + to_string(bp) + "c]   x1", n, bp, "", });
         }
-        // 3. 蓝图（底价 150 / 50）
-        {
-            string label = genBPUnlocked ? "  [OWNED] Generator Blueprint (150c)"
-                                          : "  Generator Blueprint   [150c]";
-            buyEntries.push_back({ label, "", 150, true, true });
-        }
-        {
-            string label = wireBPUnlocked ? "  [OWNED] Wire Blueprint (50c)"
-                                          : "  Wire Blueprint   [50c]";
-            buyEntries.push_back({ label, "", 50, true, false });
+        // 3. 蓝图（机器蓝图：gen 150 / wire 50 / crusher 200 / washer 160 / centrifuge 250）
+        // 结构：{label, itemName, buyPrice, bpType}
+        struct BP { string type; string disp; int price; bool& flag; };
+        BP bps[5] = {
+            { "gen",         "Generator Blueprint",  150, genBPUnlocked },
+            { "wire",        "Wire Blueprint",        50, wireBPUnlocked },
+            { "crusher",     "Crusher Blueprint",    200, crusherBPUnlocked },
+            { "washer",      "Ore Washer Blueprint", 160, washerBPUnlocked },
+            { "centrifuge",  "Centrifuge Blueprint", 250, centrifugeBPUnlocked },
+        };
+        for (auto& b : bps) {
+            string label = b.flag ? ("  [OWNED] " + b.disp + " (" + to_string(b.price) + "c)")
+                                  : ("  " + b.disp + "   [" + to_string(b.price) + "c]");
+            buyEntries.push_back({ label, "", b.price, b.type });
         }
     }
 
@@ -1991,10 +2058,13 @@ private:
     }
 
 public:
-    // 构造函数新增两个蓝图 bool 引用
+    // 构造函数：5 个机器蓝图 bool 引用（gen/wire/crusher/washer/centrifuge）
     TradeUI(PlayerData& p, ScreenInteractive& s,
-            bool& genBP, bool& wireBP)
-        : player(p), screen(s), genBPUnlocked(genBP), wireBPUnlocked(wireBP) {
+            bool& genBP, bool& wireBP,
+            bool& crusherBP, bool& washerBP, bool& centrifugeBP)
+        : player(p), screen(s), genBPUnlocked(genBP), wireBPUnlocked(wireBP),
+          crusherBPUnlocked(crusherBP), washerBPUnlocked(washerBP),
+          centrifugeBPUnlocked(centrifugeBP) {
         setupUI();
     }
 
@@ -2070,16 +2140,24 @@ public:
                 statusMessage = "Not enough coins.";
                 return;
             }
-            if (e.isBlueprint) {
-                bool& flag = e.genBlueprint ? genBPUnlocked : wireBPUnlocked;
-                if (flag) {
+            if (e.isBlueprint()) {
+                // 按 bpType 选对应的解锁标志
+                bool* flagPtr = nullptr;
+                string dispName;
+                if (e.bpType == "gen")         { flagPtr = &genBPUnlocked;         dispName = "Generator Blueprint"; }
+                else if (e.bpType == "wire")   { flagPtr = &wireBPUnlocked;        dispName = "Wire Blueprint"; }
+                else if (e.bpType == "crusher"){ flagPtr = &crusherBPUnlocked;     dispName = "Crusher Blueprint"; }
+                else if (e.bpType == "washer") { flagPtr = &washerBPUnlocked;      dispName = "Ore Washer Blueprint"; }
+                else if (e.bpType == "centrifuge") { flagPtr = &centrifugeBPUnlocked; dispName = "Centrifuge Blueprint"; }
+                if (!flagPtr) return;
+                if (*flagPtr) {
                     statusMessage = "You already own this blueprint.";
                     return;
                 }
                 player.coins -= e.buyPrice;
-                flag = true;
+                *flagPtr = true;
                 player.exp += 15;
-                statusMessage = e.genBlueprint ? "Unlocked: Generator Blueprint!" : "Unlocked: Wire Blueprint!";
+                statusMessage = "Unlocked: " + dispName + "!";
                 checkLevelUpInternal();
             }
             else {
@@ -2157,11 +2235,19 @@ public:
                     return vbox({ text("  No item selected.") }) | border;
                 }
                 BuyEntry& e = buyEntries[selected];
-                if (e.isBlueprint) {
-                    bool owned = e.genBlueprint ? genBPUnlocked : wireBPUnlocked;
+                if (e.isBlueprint()) {
+                    string dispName, title;
+                    bool owned = false;
+                    if (e.bpType == "gen")         { dispName = "Generator Blueprint";   title = "GENERATOR";   owned = genBPUnlocked; }
+                    else if (e.bpType == "wire")   { dispName = "Wire Blueprint";       title = "WIRE";        owned = wireBPUnlocked; }
+                    else if (e.bpType == "crusher"){ dispName = "Crusher Blueprint";    title = "CRUSHER";     owned = crusherBPUnlocked; }
+                    else if (e.bpType == "washer") { dispName = "Ore Washer Blueprint";  title = "ORE WASHER";  owned = washerBPUnlocked; }
+                    else if (e.bpType == "centrifuge") { dispName = "Centrifuge Blueprint"; title = "CENTRIFUGE"; owned = centrifugeBPUnlocked; }
+                    else { dispName = "Blueprint"; title = "BLUEPRINT"; }
                     return vbox({
-                        text("  " + string(e.genBlueprint ? "GENERATOR" : "WIRE") + " BLUEPRINT") | bold | color(Color::Yellow),
+                        text("  " + title + " BLUEPRINT") | bold | color(Color::Yellow),
                         separator(),
+                        text("  " + dispName),
                         text("  Cost:   " + to_string(e.buyPrice) + "c"),
                         text("  Owned:  " + string(owned ? "YES [OWNED]" : "NO")),
                         separator(),
@@ -2253,6 +2339,169 @@ public:
     bool isRunning() { return running; }
 };
 
+// ============ GameMap::generateWasteland 多彩世界：8 种 Wasteland 子群系 ============
+void GameMap::generateWasteland(WastelandBiome b) {
+    area = Area::Wasteland;
+    const int W = 150, H = 80;
+    switch (b) {
+    case WastelandBiome::GRASSLAND: {
+        fill(W, H, { '.', "Plain grass", "Open grassland", true, COLOR_GREEN });
+        for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) {
+            int r = rand() % 100;
+            if (r < 10) tiles[y][x] = { 't', "Tree", "Deciduous tree", false, COLOR_DARK_GREEN };
+            else if (r < 16) tiles[y][x] = { 'v', "Grass tuft", "Tall grass", true, COLOR_DARK_GREEN };
+            else if (r < 20) {
+                int c = COLOR_PURPLE, rr = rand() % 3;
+                if (rr == 0) c = COLOR_YELLOW; else if (rr == 1) c = COLOR_RED;
+                tiles[y][x] = { '*', "Wildflower", "Grassland wildflower", true, c };
+            }
+        }
+    } break;
+    case WastelandBiome::TUNDRA: {
+        fill(W, H, { '.', "Tundra frost", "Frozen ground", true, COLOR_GREY });
+        for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) {
+            int r = rand() % 100;
+            if (r < 7) tiles[y][x] = { '=', "Permafrost rock", "Frozen rock", false, COLOR_LIGHT_WHITE };
+            else if (r < 12) tiles[y][x] = { '~', "Ice patch", "Frozen water", true, COLOR_DARK_BLUE };
+            else if (r < 15) tiles[y][x] = { '*', "Frost flower", "Frozen bloom", true, COLOR_LIGHT_WHITE };
+        }
+    } break;
+    case WastelandBiome::DESERT: {
+        fill(W, H, { '.', "Sand", "Hot desert sand", true, COLOR_YELLOW });
+        for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) {
+            int r = rand() % 100;
+            if (r < 8) tiles[y][x] = { '=', "Cactus", "Desert cactus", false, COLOR_GREEN };
+            else if (r < 14) tiles[y][x] = { '^', "Sand dune", "Large dune", true, COLOR_DARK_YELLOW };
+            else if (r < 16) tiles[y][x] = { '~', "Oasis", "Cool oasis water", true, COLOR_BLUE };
+        }
+    } break;
+    case WastelandBiome::FOREST: {
+        fill(W, H, { '.', "Forest floor", "Dense forest floor", true, COLOR_DARK_GREEN });
+        for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) {
+            int r = rand() % 100;
+            if (r < 22) tiles[y][x] = { 't', "Tree", "Dense tree", false, COLOR_GREEN };
+            else if (r < 29) {
+                int c = (rand() % 2) ? COLOR_RED : COLOR_PURPLE;
+                tiles[y][x] = { '*', "Mushroom", "Forest mushroom", true, c };
+            }
+            else if (r < 32) tiles[y][x] = { 'v', "Bush", "Low shrub", true, COLOR_GREEN };
+        }
+        // 森林特例：O(75,40) 周围 5×5 清障（防止入口被树包围）
+        for (int dy = -2; dy <= 2; ++dy) for (int dx = -2; dx <= 2; ++dx) {
+            int x = 75 + dx, y = 40 + dy;
+            if (x >= 1 && x < W - 1 && y >= 1 && y < H - 1 && tiles[y][x].display != '.')
+                tiles[y][x] = { '.', "Forest floor", "Cleared path", true, COLOR_DARK_GREEN };
+        }
+    } break;
+    case WastelandBiome::MEADOW: {
+        fill(W, H, { '.', "Meadow turf", "Meadow grassland", true, COLOR_GREEN });
+        for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) {
+            int r = rand() % 100;
+            if (r < 4) tiles[y][x] = { 't', "Single tree", "Scattered tree", false, COLOR_DARK_GREEN };
+            else if (r < 22) {
+                int c = COLOR_PURPLE, rr = rand() % 3;
+                if (rr == 0) c = COLOR_YELLOW; else if (rr == 1) c = COLOR_RED;
+                tiles[y][x] = { '*', "Wild flower", "Meadow flower", true, c };
+            }
+            else if (r < 26) tiles[y][x] = { 'v', "Grass tuft", "Tall grass", true, COLOR_DARK_GREEN };
+        }
+    } break;
+    case WastelandBiome::OCEAN: {
+        fill(W, H, { '~', "Sea", "Open ocean", false, COLOR_BLUE });
+        // 10% 概率随机岛屿（沙地 + 偶尔棕榈）+ 5% 岩礁
+        for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) {
+            int r = rand() % 100;
+            if (r < 10) tiles[y][x] = { '.', "Island sand", "Tropical sand", true, COLOR_YELLOW };
+            else if (r < 11) tiles[y][x] = { 't', "Palm tree", "Tropical palm", false, COLOR_DARK_GREEN };
+            else if (r < 16) tiles[y][x] = { '^', "Rock reef", "Underwater reef", false, COLOR_DARK_CYAN };
+        }
+        // Ocean 特殊：在 C(2,2) 周围强制造 5×4 沙岛（保证 C 有地）
+        for (int y = 1; y <= 5; ++y) for (int x = 1; x <= 5; ++x)
+            tiles[y][x] = { '.', "Island sand", "Dock sand", true, COLOR_YELLOW };
+        // O(75,40) 周围 5×5 沙岛（保证玩家找到入口）
+        for (int dy = -2; dy <= 2; ++dy) for (int dx = -2; dx <= 2; ++dx) {
+            int x = 75 + dx, y = 40 + dy;
+            if (x >= 1 && x < W - 1 && y >= 1 && y < H - 1)
+                tiles[y][x] = { '.', "Island sand", "Dock sand", true, COLOR_YELLOW };
+        }
+    } break;
+    case WastelandBiome::WETLAND: {
+        fill(W, H, { '.', "Wet grass", "Marsh grass", true, COLOR_DARK_GREEN });
+        for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) {
+            int r = rand() % 100;
+            if (r < 15) tiles[y][x] = { '~', "Shallow water", "Marsh water", true, COLOR_CYAN };
+            else if (r < 27) tiles[y][x] = { 'v', "Reed", "Tall reeds", true, COLOR_DARK_GREEN };
+            else if (r < 35) {
+                int c = (rand() % 2) ? COLOR_LIGHT_WHITE : COLOR_YELLOW;
+                tiles[y][x] = { '*', "Lotus", "Water lotus", true, c };
+            }
+            else if (r < 41) tiles[y][x] = { 't', "Willow", "Droopy willow", false, COLOR_GREEN };
+        }
+    } break;
+    case WastelandBiome::WASTELAND:
+    default:
+        genWastelandClassic();   // b=0 旧粘土荒地，保持完全回归
+        return;
+    }
+
+    // === 公共后处理（8 种通用） ===
+    // C 车：确保 (2,2) 3×3 干净（Ocean 已在分支内造岛，这里兜底 stamp 字符）
+    if (b == WastelandBiome::OCEAN) ensureOpenArea(2, 2, true);
+    else ensureOpenArea(2, 2, false);
+    tiles[2][2] = { 'C', "Car", "Return to home", true, COLOR_YELLOW };
+    // 洞入口 O(75,40)：3×3 清障后 stamp
+    if (b == WastelandBiome::OCEAN) ensureOpenArea(75, 40, true);
+    else ensureOpenArea(75, 40, false);
+    tiles[40][75] = { 'O', "Cave Entrance", "Enter cave", true, COLOR_CYAN };
+    // 矿物
+    placeMinerals(90);
+}
+
+// ============ GameMap::generateCave 多彩世界：3 种 Cave 子类型 ============
+void GameMap::generateCave(CaveType t) {
+    area = Area::Cave;
+    const int W = 45, H = 28;
+    switch (t) {
+    case CaveType::BROWN_KARST: {
+        fill(W, H, { '.', "Karst floor", "Brown karst floor", true, COLOR_DARK_YELLOW });
+        for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) {
+            if (x == 0 || y == 0 || x == W - 1 || y == H - 1)
+                tiles[y][x] = { '=', "Karst wall", "Karst rock wall", false, COLOR_DARK_YELLOW };
+            else {
+                int r = rand() % 100;
+                if (r < 14) tiles[y][x] = { '=', "Rock column", "Karst rock", false, COLOR_DARK_YELLOW };
+                else if (r < 17) tiles[y][x] = { '~', "Karst pit", "Underground pool", true, COLOR_CYAN };
+                else if (r < 19) tiles[y][x] = { '^', "Stalagmite", "Stone column", false, COLOR_DARK_PURPLE };
+            }
+        }
+    } break;
+    case CaveType::LUSH_CAVE: {
+        fill(W, H, { '.', "Lush floor", "Mossy cave floor", true, COLOR_GREEN });
+        for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) {
+            if (x == 0 || y == 0 || x == W - 1 || y == H - 1)
+                tiles[y][x] = { '=', "Lush wall", "Mossy cave wall", false, COLOR_DARK_GREEN };
+            else {
+                int r = rand() % 100;
+                if (r < 14) tiles[y][x] = { '=', "Mossy rock", "Moss-covered rock", false, COLOR_DARK_GREEN };
+                else if (r < 19) tiles[y][x] = { 't', "Glow plant", "Bioluminescent plant", true, COLOR_YELLOW };
+                else if (r < 25) {
+                    int c = (rand() % 2) ? COLOR_PURPLE : COLOR_RED;
+                    tiles[y][x] = { '*', "Glow mushroom", "Glowing cave mushroom", true, c };
+                }
+                else if (r < 29) tiles[y][x] = { 'v', "Vine", "Hanging vine", true, COLOR_DARK_GREEN };
+            }
+        }
+    } break;
+    case CaveType::GREY_CAVE:
+    default:
+        genCaveGrey();   // t=0 灰岩洞旧默认
+        return;
+    }
+    // 公共后处理：O(1,1) + 矿物
+    tiles[1][1] = { 'O', "Cave Exit", "Return to wasteland", true, COLOR_CYAN };
+    placeMinerals(35);
+}
+
 // ======================== 游戏主程序 ========================
 class ChemicalWorldGame {
 private:
@@ -2275,6 +2524,9 @@ private:
     bool crusher_blueprint_unlocked = false;
     bool washer_blueprint_unlocked = false;
     bool centrifuge_blueprint_unlocked = false;
+    // 多彩世界：上次切换后的群系子类型（临时状态，不存档；每次切换重随机）
+    WastelandBiome wasteBiome = WastelandBiome::WASTELAND;
+    CaveType caveType = CaveType::GREY_CAVE;
     vector<MachineMeta> machineMeta;
     map<pair<int, int>, PowerGenerator> generators;
     map<pair<int, int>, Crusher> crushers;
@@ -2439,6 +2691,9 @@ private:
                 // 这里只需保留 machineMeta 条目（用于 E 键查找与地图渲染）。
             }
         }
+        // 存档里机器/电线的 tile.display 可能已被旧版 area 切换 regenerate 覆盖成 '.'
+        // （幽灵方块：meta 在但 gameMap 显示丢了）。这里从 machineMeta 反向 stamp 修复。
+        rehydrateMachineTiles();
         return true;
     }
 
@@ -2464,6 +2719,8 @@ private:
         crusher_blueprint_unlocked = false;
         washer_blueprint_unlocked = false;
         centrifuge_blueprint_unlocked = false;
+        wasteBiome = WastelandBiome::WASTELAND;
+        caveType = CaveType::GREY_CAVE;
         generators.clear();
         crushers.clear();
         washers.clear();
@@ -2793,7 +3050,8 @@ private:
         SetConsoleCursorInfo(hConsole, &cursorInfo);
 
         auto screen = ScreenInteractive::Fullscreen();
-        TradeUI tradeUI(player, screen, gen_blueprint_unlocked, wire_blueprint_unlocked);
+        TradeUI tradeUI(player, screen, gen_blueprint_unlocked, wire_blueprint_unlocked,
+                        crusher_blueprint_unlocked, washer_blueprint_unlocked, centrifuge_blueprint_unlocked);
         screen.Loop(tradeUI.getComponent());
 
         cursorInfo.bVisible = true;
@@ -2836,14 +3094,30 @@ private:
             this_thread::sleep_for(chrono::milliseconds(220));
         }
         currentArea = destination;
-        gameMap.generate(currentArea);
         if (destination == Area::Wasteland) {
+            // 多彩世界：每次切换荒地随机新子群系（8 选 1）
+            wasteBiome = static_cast<WastelandBiome>(rand() % 8);
+            gameMap.generateWasteland(wasteBiome);
             player.x = 4; player.y = 2;
-            message = "Welcome to the wasteland. Find a cave entrance marked O.";
+            const char* welcome = "Welcome!";
+            switch (wasteBiome) {
+            case WastelandBiome::WASTELAND:  welcome = "Welcome to the Wasteland. Dry ground and salt flats."; break;
+            case WastelandBiome::GRASSLAND: welcome = "Welcome to the Grasslands. Wide open, gentle breeze."; break;
+            case WastelandBiome::TUNDRA:    welcome = "Welcome to the Tundra. Frost glistens everywhere."; break;
+            case WastelandBiome::DESERT:    welcome = "Welcome to the Desert. Hot sand, rare oases."; break;
+            case WastelandBiome::FOREST:    welcome = "Welcome to the Forest. Trees tower overhead."; break;
+            case WastelandBiome::MEADOW:    welcome = "Welcome to the Meadow. Wild flowers as far as the eye can see."; break;
+            case WastelandBiome::OCEAN:     welcome = "Welcome to the Ocean. Small isles dot the horizon. Find O on sand."; break;
+            case WastelandBiome::WETLAND:   welcome = "Welcome to the Wetlands. Reeds, lotus and shallow water."; break;
+            }
+            message = string(welcome) + "  Find the O cave entrance.";
         }
         else {
+            gameMap.generate(Area::Home);
             player.x = 10; player.y = 5;
             message = "Back home. Machines can only be used here.";
+            // generate(Home) 重置了地图，需从 machineMeta 恢复玩家放置的 G/X/W/R/+ tile
+            rehydrateMachineTiles();
         }
     }
 
@@ -2924,9 +3198,11 @@ private:
     void renderMap() {
         setcolor(COLOR_CYAN);
         cout << "==================================================\n";
-        string areaName = currentArea == Area::Home ? "HOME" :
-            (currentArea == Area::Wasteland ? "WASTELAND" : "CAVE");
-        cout << "|                  " << areaName << " MAP                   |\n";
+        string title = biomeDisplayName() + " MAP";
+        // banner 宽 50，"|                  X                   |" — 左右各 18 空格居中
+        int padL = 18 + (22 - (int)title.size()) / 2;
+        int padR = max(1, 50 - 2 - padL - (int)title.size());
+        cout << "|" << string(padL, ' ') << title << string(padR, ' ') << "|\n";
         cout << "==================================================\n\n";
         setcolor(COLOR_RESET);
 
@@ -2959,12 +3235,12 @@ private:
             cout << '\n';
         }
 
-        // ===== 图例（按区域显示实际出现的符号；矿石仅出现在 Wasteland/Cave）=====
+        // ===== 图例（按区域/子类型显示专属符号；矿石通用）=====
         setcolor(COLOR_RESET);
         cout << "\n  Legend:  ";
         setcolor(COLOR_YELLOW); cout << "P=You  ";
-        setcolor(COLOR_GREEN);  cout << ".=Grass  ";
         if (currentArea == Area::Home) {
+            setcolor(COLOR_GREEN);  cout << ".=Grass  ";
             setcolor(COLOR_DARK_GREEN); cout << "t=Tree  v=Grass_tuft  ";
             setcolor(COLOR_BLUE);     cout << "~=Water  ";
             setcolor(COLOR_YELLOW);   cout << "*=Flower  a=Animal  |  ";
@@ -2976,38 +3252,88 @@ private:
             setcolor(COLOR_PURPLE);   cout << "R=Centrifuge  ";
             setcolor(COLOR_BLUE);     cout << "+=Wire  ";
             setcolor(COLOR_YELLOW);   cout << "C=Car(travel)";
-        } else {
-            if (currentArea == Area::Wasteland) {
-                setcolor(COLOR_DARK_YELLOW); cout << "=Dry_ground  ";
+        } else if (currentArea == Area::Wasteland) {
+            // 按 Wasteland 子类型显示对应地板与专属装饰
+            switch (wasteBiome) {
+            case WastelandBiome::WASTELAND:
+                setcolor(COLOR_DARK_YELLOW); cout << ".=Dry_ground  ";
                 setcolor(COLOR_LIGHT_WHITE); cout << "~=Salt_Flats  ";
-                setcolor(COLOR_RED);     cout << "^=Red_Dune  ";
-                setcolor(COLOR_YELLOW);  cout << "C=Car  ";
-                setcolor(COLOR_CYAN);    cout << "O=Cave_entrance  |  ";
-            } else {
-                setcolor(COLOR_GREY);  cout << "=Cave_floor  ";
-                setcolor(COLOR_CYAN);  cout << "O=Cave_exit  |  ";
+                setcolor(COLOR_RED);         cout << "^=Red_Dune  ";  break;
+            case WastelandBiome::GRASSLAND:
+                setcolor(COLOR_GREEN);      cout << ".=Grass  ";
+                setcolor(COLOR_DARK_GREEN); cout << "t=Tree  v=Grass  ";
+                setcolor(COLOR_YELLOW);     cout << "*=Flower  ";  break;
+            case WastelandBiome::TUNDRA:
+                setcolor(COLOR_GREY);         cout << ".=Frost  ";
+                setcolor(COLOR_LIGHT_WHITE);  cout << "==Rock  ~=Ice  ";
+                setcolor(COLOR_YELLOW);       cout << "*=Frost_flower  ";  break;
+            case WastelandBiome::DESERT:
+                setcolor(COLOR_YELLOW);       cout << ".=Sand  ";
+                setcolor(COLOR_GREEN);        cout << "==Cactus  ";
+                setcolor(COLOR_DARK_YELLOW);  cout << "^=Dune  ";
+                setcolor(COLOR_BLUE);         cout << "~=Oasis  ";  break;
+            case WastelandBiome::FOREST:
+                setcolor(COLOR_DARK_GREEN); cout << ".=Forest_floor  t=Tree(many)  ";
+                setcolor(COLOR_RED);        cout << "*=Mushroom  ";
+                setcolor(COLOR_GREEN);      cout << "v=Bush  ";  break;
+            case WastelandBiome::MEADOW:
+                setcolor(COLOR_GREEN);      cout << ".=Meadow  *=Flower(many)  ";
+                setcolor(COLOR_DARK_GREEN); cout << "v=Grass  t=Tree(rare)  ";  break;
+            case WastelandBiome::OCEAN:
+                setcolor(COLOR_BLUE);       cout << "~=Sea  ";
+                setcolor(COLOR_YELLOW);     cout << ".=Sand  t=Palm  ";
+                setcolor(COLOR_DARK_CYAN);  cout << "^=Reef  ";  break;
+            case WastelandBiome::WETLAND:
+                setcolor(COLOR_DARK_GREEN); cout << ".=Marsh  ";
+                setcolor(COLOR_CYAN);       cout << "~=Shallow_water  ";
+                setcolor(COLOR_DARK_GREEN); cout << "v=Reed  t=Willow  ";
+                setcolor(COLOR_YELLOW);     cout << "*=Lotus  ";  break;
             }
-            setcolor(COLOR_GREY);     cout << "==Rock  ";
-            setcolor(COLOR_DARK_RED); cout << "Ore: H=Hematite M=Magnetite B=Bauxite T=Cassiterite P=Malachite U=Chalcopyrite G=Gold S=Silver C=Coal";
-            if (currentArea == Area::Wasteland) cout << " (C also=Car)";
+            setcolor(COLOR_YELLOW); cout << " C=Car  ";
+            setcolor(COLOR_CYAN);   cout << "O=Cave_entrance  |  ";
+            setcolor(COLOR_GREY);   cout << "==Rock  ";
+            setcolor(COLOR_DARK_RED); cout << "Ore: H/M/B/T/P/U/G/S/C";
+            cout << " (C also=Car)";
+        } else {  // Area::Cave — 按子类型分
+            switch (caveType) {
+            case CaveType::GREY_CAVE:
+                setcolor(COLOR_GREY);         cout << ".=Floor  ";
+                setcolor(COLOR_GREY);         cout << "==Rock  ";  break;
+            case CaveType::BROWN_KARST:
+                setcolor(COLOR_DARK_YELLOW);  cout << ".=Karst_floor  ";
+                setcolor(COLOR_DARK_YELLOW);  cout << "==Rock  ";
+                setcolor(COLOR_CYAN);         cout << "~=Karst_pool  ";
+                setcolor(COLOR_PURPLE);       cout << "^=Stalagmite  ";  break;
+            case CaveType::LUSH_CAVE:
+                setcolor(COLOR_GREEN);        cout << ".=Mossy_floor  ";
+                setcolor(COLOR_DARK_GREEN);   cout << "==Moss_rock  ";
+                setcolor(COLOR_YELLOW);       cout << "t=Glow_plant  ";
+                setcolor(COLOR_PURPLE);       cout << "*=Glow_mushroom  ";
+                setcolor(COLOR_DARK_GREEN);   cout << "v=Vine  ";  break;
+            }
+            setcolor(COLOR_CYAN);   cout << "O=Cave_exit  |  ";
+            setcolor(COLOR_DARK_RED); cout << "Ore: Hematite/Magnetite/Bauxite/Tin/Malachite/Chalcopyrite/Gold/Silver/Coal";
         }
         cout << "\n";
         setcolor(COLOR_RESET);
     }
 
     void showStatus() {
-        string areaName = currentArea == Area::Home ? "HOME" :
-            (currentArea == Area::Wasteland ? "WASTELAND" : "CAVE");
+        string areaName = biomeDisplayName();
         setcolor(COLOR_YELLOW);
         cout << "\n==================================================\n";
         cout << "|  " << player.name << " | Lv." << player.level;
         cout << " | Coins: " << player.coins;
         cout << " | Exp: " << player.exp;
-        cout << string(30 - (player.name.length() + to_string(player.level).length() +
-            to_string(player.coins).length() + to_string(player.exp).length()), ' ');
+        int pad = 30 - ((int)player.name.length() + (int)to_string(player.level).length() +
+                        (int)to_string(player.coins).length() + (int)to_string(player.exp).length());
+        if (pad < 0) pad = 0;
+        cout << string(pad, ' ');
         cout << "|\n";
         cout << "|  Area: " << areaName << "  Position: (" << player.x << ", " << player.y << ")";
-        cout << string(48 - (to_string(player.x).length() + to_string(player.y).length()), ' ');
+        int pad2 = 48 - ((int)to_string(player.x).length() + (int)to_string(player.y).length() + (int)areaName.length());
+        if (pad2 < 0) pad2 = 0;
+        cout << string(pad2, ' ');
         cout << "|\n";
         cout << "==================================================\n";
         setcolor(COLOR_RESET);
@@ -3066,6 +3392,37 @@ private:
         setcolor(COLOR_RESET);
     }
 
+    // ====== 多彩世界：子类型名称辅助函数（标题/状态/消息共用） ======
+    string biomeSimpleName() const {
+        if (currentArea == Area::Wasteland) {
+            switch (wasteBiome) {
+            case WastelandBiome::WASTELAND:  return "Wasteland";
+            case WastelandBiome::GRASSLAND: return "Grassland";
+            case WastelandBiome::TUNDRA:    return "Tundra";
+            case WastelandBiome::DESERT:    return "Desert";
+            case WastelandBiome::FOREST:    return "Forest";
+            case WastelandBiome::MEADOW:    return "Meadow";
+            case WastelandBiome::OCEAN:     return "Ocean";
+            case WastelandBiome::WETLAND:   return "Wetland";
+            default: return "Wasteland";
+            }
+        }
+        if (currentArea == Area::Cave) {
+            switch (caveType) {
+            case CaveType::GREY_CAVE:   return "Grey Cave";
+            case CaveType::BROWN_KARST: return "Brown Karst";
+            case CaveType::LUSH_CAVE:   return "Lush Cave";
+            default: return "Cave";
+            }
+        }
+        return "Home";
+    }
+    string biomeDisplayName() const {
+        if (currentArea == Area::Home)  return "HOME";
+        if (currentArea == Area::Wasteland) return string("WASTELAND — ") + biomeSimpleName();
+        return string("CAVE — ") + biomeSimpleName();
+    }
+
     void processKey(int key) {
         int newX = player.x, newY = player.y;
 
@@ -3095,18 +3452,39 @@ private:
             }
             if (currentArea == Area::Wasteland && gameMap.isNear(gameMap.getWidth() / 2, gameMap.getHeight() / 2, 'O', player.x, player.y)) {
                 currentArea = Area::Cave;
-                gameMap.generate(currentArea);
+                // 多彩世界：每次进洞随机新子类型（3 选 1）
+                caveType = static_cast<CaveType>(rand() % 3);
+                gameMap.generateCave(caveType);
                 player.x = 2;
                 player.y = 2;
-                message = "You entered a cave. Search the grey rock for exposed ore.";
+                const char* enter = "You descended into a cave.";
+                switch (caveType) {
+                case CaveType::GREY_CAVE:   enter = "You entered a grey cavern. Search grey rock for ore."; break;
+                case CaveType::BROWN_KARST: enter = "You entered a brown karst cave. Stalagmites rise from the floor."; break;
+                case CaveType::LUSH_CAVE:   enter = "You entered a lush cave. Glow plants light the way."; break;
+                }
+                message = enter;
                 return;
             }
             if (currentArea == Area::Cave && gameMap.isNear(1, 1, 'O', player.x, player.y)) {
                 currentArea = Area::Wasteland;
-                gameMap.generate(currentArea);
+                // 多彩世界：每次出洞也随机新的 Wasteland 子群系
+                wasteBiome = static_cast<WastelandBiome>(rand() % 8);
+                gameMap.generateWasteland(wasteBiome);
                 player.x = 4;
                 player.y = 2;
-                message = "You climbed out of the cave.";
+                const char* emerge = "You climbed out of the cave.";
+                switch (wasteBiome) {
+                case WastelandBiome::WASTELAND:  emerge = "You climbed out into the dry Wasteland."; break;
+                case WastelandBiome::GRASSLAND: emerge = "You climbed out into sunlit Grasslands."; break;
+                case WastelandBiome::TUNDRA:    emerge = "You climbed out into the frozen Tundra."; break;
+                case WastelandBiome::DESERT:    emerge = "You climbed out into the scorching Desert."; break;
+                case WastelandBiome::FOREST:    emerge = "You climbed out into a towering Forest."; break;
+                case WastelandBiome::MEADOW:    emerge = "You climbed out into a flower-filled Meadow."; break;
+                case WastelandBiome::OCEAN:     emerge = "You climbed out onto tiny Ocean islands. Find O on sand."; break;
+                case WastelandBiome::WETLAND:   emerge = "You climbed out into misty Wetlands."; break;
+                }
+                message = emerge;
                 return;
             }
             // Generator interaction (isNear any installed G anchor)
@@ -3291,6 +3669,7 @@ private:
         if (gameMap.getTile(x, y).display != '.') return false;
         player.coins -= 5;
         gameMap.getTile(x, y) = { '+', "Wire", "Conducts power", false, COLOR_BLUE };
+        machineMeta.push_back({ x, y, '+', 0, 0, false });   // 入 meta，供 rehydrate 恢复
         return true;
     }
 
@@ -3365,6 +3744,41 @@ private:
         centrifuges[{x, y}] = Centrifuge{};
         machineMeta.push_back({ x, y, 'R', 0, 0, false });
         return true;
+    }
+
+    // 从 machineMeta 重建机器/电线 tile 显示。
+    // 修复：travelTo / E 键切回 Home 时 generate(Home) 会把整个地图重置为 '.' 并重随机装饰，
+    // 但不会从 machineMeta 反向 stamp 玩家放置的 G/X/W/R/+ —— 导致"幽灵方块"
+    // （meta 还在所以 E 键能找到机器，但 gameMap 的 display='.' 看不见、BFS 找不到电源、B 无法判重覆盖）。
+    // 电线 '+' 之前不入 meta，切换后彻底丢失；现在 placeWire 也 push meta，故此处一并恢复。
+    void rehydrateMachineTiles() {
+        if (currentArea != Area::Home) return;
+        struct M { char main; char sub; const char* name; int mainCol; int subCol; };
+        static const M tbl[] = {
+            {'G','g',"Power Generator", COLOR_RED,      COLOR_DARK_RED},
+            {'X','x',"Crusher",         COLOR_YELLOW,   COLOR_DARK_YELLOW},
+            {'W','w',"Ore Washer",      COLOR_CYAN,     COLOR_DARK_CYAN},
+            {'R','r',"Centrifuge",      COLOR_PURPLE,   COLOR_DARK_PURPLE},
+            {'F','f',"Blast Furnace",   COLOR_RED,      COLOR_DARK_RED},
+            {'L','l',"Lathe",           COLOR_PURPLE,  COLOR_DARK_PURPLE},
+        };
+        const int W = gameMap.getWidth(), H = gameMap.getHeight();
+        for (auto& m : machineMeta) {
+            if (m.type == '+') {
+                if (m.x >= 0 && m.x < W && m.y >= 0 && m.y < H)
+                    gameMap.getTile(m.x, m.y) = { '+', "Wire", "Conducts power", false, COLOR_BLUE };
+                continue;
+            }
+            const M* info = nullptr;
+            for (auto& mi : tbl) if (mi.main == m.type) { info = &mi; break; }
+            if (!info) continue;
+            // 2×2 机器：边界检查后 stamp 主格 + 3 辅格
+            if (m.x < 0 || m.x + 1 >= W || m.y < 0 || m.y + 1 >= H) continue;
+            gameMap.getTile(m.x,     m.y)     = { info->main, info->name, "", false, info->mainCol };
+            gameMap.getTile(m.x,     m.y + 1) = { info->sub,  info->name, "", false, info->subCol };
+            gameMap.getTile(m.x + 1, m.y)     = { info->sub,  info->name, "", false, info->subCol };
+            gameMap.getTile(m.x + 1, m.y + 1) = { info->sub,  info->name, "", false, info->subCol };
+        }
     }
 
     // 通用机器查找（2×2-aware，4 格遍历，修复旧 findNearbyGenerator 盲区）
