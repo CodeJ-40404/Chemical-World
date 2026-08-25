@@ -3,7 +3,7 @@
 [![C++](https://img.shields.io/badge/C++-20-blue.svg)](https://isocpp.org/)
 [![FTXUI](https://img.shields.io/badge/FTXUI-6.1.9-green.svg)](https://github.com/ArthurSonzogni/FTXUI)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
-[![Save Format](https://img.shields.io/badge/save-v3-orange.svg)](#存档系统)
+[![Save Format](https://img.shields.io/badge/save-v4-green.svg)](#存档系统)
 
 一个基于 C++20 和 FTXUI 构建的终端交互式工业沙盒游戏，灵感来自 [GT:New Horizons](https://www.curseforge.com/minecraft/modpacks/gt-new-horizons) 的简化电力网络与机器链。挖掘矿石 → 土高炉冶炼 → 车床加工钢零件 → 卖钱 / 装配更多机器，搭建自己的工业帝国。
 
