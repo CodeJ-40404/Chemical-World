@@ -119,7 +119,25 @@ int itemPrice(const string& name) {
         {"iron_ingot", 12}, {"alloy", 45},
         // 车床产品（steel 前缀）
         {"steel_gear", 25}, {"steel_rod", 20}, {"steel_plate", 18},
-        {"steel_spring", 30}, {"steel_bolt", 12}, {"steel_wire", 35}
+        {"steel_spring", 30}, {"steel_bolt", 12}, {"steel_wire", 35},
+        // 金属锭（土高炉产物，之前漏了导致无法出售）
+        {"aluminum", 15}, {"tin", 18}, {"copper", 20},
+        {"gold_ingot", 60}, {"silver_ingot", 35},
+        // 矿物处理链主产物（24 种）
+        // 破碎矿石（crushed_*，破碎机产物）
+        {"crushed_hematite", 8}, {"crushed_magnetite", 8}, {"crushed_bauxite", 8},
+        {"crushed_cassiterite", 8}, {"crushed_malachite", 8}, {"crushed_chalcopyrite", 8},
+        {"crushed_gold", 8}, {"crushed_silver", 8},
+        // 纯净矿石（purified_*，洗矿槽产物）
+        {"purified_hematite", 12}, {"purified_magnetite", 12}, {"purified_bauxite", 12},
+        {"purified_cassiterite", 12}, {"purified_malachite", 12}, {"purified_chalcopyrite", 12},
+        {"purified_gold", 12}, {"purified_silver", 12},
+        // 矿粉（*_dust，离心机产物）
+        {"hematite_dust", 18}, {"magnetite_dust", 18}, {"bauxite_dust", 18},
+        {"cassiterite_dust", 18}, {"malachite_dust", 18}, {"chalcopyrite_dust", 18},
+        {"gold_dust", 18}, {"silver_dust", 18},
+        // 副产物
+        {"gravel", 1}, {"copper_dust", 20}, {"rare_dust", 30}
     };
     auto it = prices.find(name);
     return it != prices.end() ? it->second : 0;
@@ -206,6 +224,7 @@ private:
     int selectedRecipe = 0;
 
     vector<Recipe> recipes = {
+        // 旧路径：直接烧矿石（1 ingot）
         {"Steel Making",  "hematite",    "steel",       2, 1, 1, 30000},
         {"Steel Making",  "magnetite",   "steel",       2, 1, 1, 30000},
         {"Aluminum Smelt","bauxite",     "aluminum",    2, 1, 1, 30000},
@@ -213,7 +232,16 @@ private:
         {"Copper Smelt",  "malachite",   "copper",      2, 1, 1, 30000},
         {"Copper Smelt",  "chalcopyrite","copper",      2, 1, 1, 30000},
         {"Gold Smelting", "gold_ore",    "gold_ingot",  2, 1, 1, 30000},
-        {"Silver Smelt",  "silver_ore",  "silver_ingot",2, 1, 1, 30000}
+        {"Silver Smelt",  "silver_ore",  "silver_ingot",2, 1, 1, 30000},
+        // 新路径：dust → ingot ×2 效率（GT:NH 经典处理链奖励）
+        {"Steel From Dust",  "hematite_dust",  "steel",       2, 1, 2, 30000},
+        {"Steel From Dust",  "magnetite_dust", "steel",       2, 1, 2, 30000},
+        {"Aluminum From Dust","bauxite_dust",  "aluminum",    2, 1, 2, 30000},
+        {"Tin From Dust",    "cassiterite_dust","tin",        2, 1, 2, 30000},
+        {"Copper From Dust", "malachite_dust", "copper",      2, 1, 2, 30000},
+        {"Copper From Dust", "chalcopyrite_dust","copper",    2, 1, 2, 30000},
+        {"Gold From Dust",   "gold_dust",      "gold_ingot",  2, 1, 2, 30000},
+        {"Silver From Dust", "silver_dust",    "silver_ingot",2, 1, 2, 30000}
     };
 
     int computeFrame(Slot& s) const {
@@ -649,6 +677,401 @@ public:
             return molds[loadedMold].iconArt;  // 展示刚做好的产品
         }
         return {};
+    }
+};
+
+// ======================== 矿物处理链机器 ========================
+// Crusher 破碎机：4 槽并行，耗电 4 EU/tick/槽，1 ore → 2 crushed + 1 gravel
+// 动画 12 帧：0-3 STONING(进料), 4-8 MILLING(齿轮旋转), 9-11 DONE_POUR(碎屑流出)
+class Crusher {
+public:
+    enum SlotPhase { IDLE, STONING, MILLING, DONE_POUR };
+    struct Slot {
+        SlotPhase phase = IDLE;
+        int recipeIndex = -1;
+        int progressMs = 0;
+        int totalMs = 10000;
+        int loadedRecipe = -1;
+        int oreCount = 0;
+        int resultCount = 0;
+    };
+    struct Recipe {
+        string name;
+        string oreName;
+        string crushedName;
+        int oreRequired;
+        int crushedAmount;
+        int durationMs;
+        string byproduct;
+        int byproductAmount;
+    };
+
+private:
+    vector<Slot> slots;
+    int focusedSlot = 0;
+    int selectedRecipe = 0;
+    bool hasPowerThisTick[4];
+    int frameIndex[4];
+    vector<string> logs;
+
+    vector<Recipe> recipes = {
+        {"Crush Hematite",    "hematite",    "crushed_hematite",    1, 2, 10000, "gravel", 1},
+        {"Crush Magnetite",   "magnetite",   "crushed_magnetite",   1, 2, 10000, "gravel", 1},
+        {"Crush Bauxite",     "bauxite",     "crushed_bauxite",     1, 2, 10000, "gravel", 1},
+        {"Crush Cassiterite", "cassiterite", "crushed_cassiterite", 1, 2, 10000, "gravel", 1},
+        {"Crush Malachite",   "malachite",   "crushed_malachite",   1, 2, 10000, "gravel", 1},
+        {"Crush Chalcopyrite","chalcopyrite","crushed_chalcopyrite",1, 2, 10000, "gravel", 1},
+        {"Crush Gold Ore",    "gold_ore",    "crushed_gold",        1, 2, 10000, "gravel", 1},
+        {"Crush Silver Ore",  "silver_ore",  "crushed_silver",      1, 2, 10000, "gravel", 1}
+    };
+
+    int computeFrame(const Slot& s) const {
+        if (s.phase == IDLE) return 0;
+        if (s.phase == DONE_POUR) return 11;
+        int pct = s.totalMs > 0 ? (s.progressMs * 100) / s.totalMs : 0;
+        if (pct < 33) return (pct * 4) / 33;            // 0-3 STONING
+        if (pct < 83) return 4 + ((pct - 33) * 5) / 50; // 4-8 MILLING
+        return 9 + min(2, ((pct - 83) * 3) / 17);       // 9-11 DONE_POUR
+    }
+
+public:
+    Crusher() : slots(4) {
+        for (int i = 0; i < 4; ++i) { hasPowerThisTick[i] = true; frameIndex[i] = 0; }
+    }
+
+    int getSlotCount() const { return (int)slots.size(); }
+    Slot& getSlot(int i) { return slots[i]; }
+    const Slot& getSlot(int i) const { return slots[i]; }
+    void setSlotPower(int i, bool p) { if (i >= 0 && i < 4) hasPowerThisTick[i] = p; }
+    bool getSlotPower(int i) const { return i >= 0 && i < 4 ? hasPowerThisTick[i] : true; }
+    int getFrameIndex(int i) const { return i >= 0 && i < 4 ? frameIndex[i] : 0; }
+
+    int getFocusedSlot() const { return focusedSlot; }
+    void setFocusedSlot(int s) { if (s >= 0 && s < 4) focusedSlot = s; }
+    int getSelectedRecipe() const { return selectedRecipe; }
+    void setSelectedRecipe(int r) { if (r >= 0 && r < (int)recipes.size()) selectedRecipe = r; }
+    int getRecipeCount() const { return (int)recipes.size(); }
+    const Recipe& getRecipe(int i) const { return recipes[i]; }
+    vector<string> getRecipeList() const {
+        vector<string> v;
+        for (auto& r : recipes) v.push_back(r.name + "  (" + r.oreName + " -> " + r.crushedName + " x" + to_string(r.crushedAmount) + ")");
+        return v;
+    }
+
+    bool canLoad(PlayerData& p, int slotIdx) const {
+        if (slotIdx < 0 || slotIdx >= 4) return false;
+        if (slots[slotIdx].phase != IDLE) return false;
+        const Recipe& r = recipes[selectedRecipe];
+        return p.hasItem(r.oreName, r.oreRequired);
+    }
+
+    bool loadSlot(PlayerData& p, int slotIdx) {
+        if (!canLoad(p, slotIdx)) return false;
+        Recipe& r = recipes[selectedRecipe];
+        p.removeItem(r.oreName, r.oreRequired);
+        Slot& s = slots[slotIdx];
+        s.phase = STONING;
+        s.recipeIndex = selectedRecipe;
+        s.loadedRecipe = selectedRecipe;
+        s.oreCount = r.oreRequired;
+        s.progressMs = 0;
+        s.totalMs = r.durationMs;
+        s.resultCount = 0;
+        return true;
+    }
+
+    bool cancelSlot(int slotIdx) {
+        if (slotIdx < 0 || slotIdx >= 4) return false;
+        Slot& s = slots[slotIdx];
+        if (s.phase == IDLE || s.phase == DONE_POUR) return false;
+        s.phase = IDLE;
+        s.progressMs = 0;
+        return true;
+    }
+
+    bool collectSlot(PlayerData& p, int slotIdx) {
+        if (slotIdx < 0 || slotIdx >= 4) return false;
+        Slot& s = slots[slotIdx];
+        if (s.phase != DONE_POUR) return false;
+        Recipe& r = recipes[s.recipeIndex];
+        p.addItem(r.crushedName, r.crushedAmount, "crushed", 8);
+        p.addItem(r.byproduct, r.byproductAmount, "material", itemPrice(r.byproduct));
+        s.phase = IDLE;
+        s.progressMs = 0;
+        s.oreCount = 0;
+        s.resultCount = 0;
+        return true;
+    }
+
+    void update(PlayerData& p, int elapsedMs = 100) {
+        for (int i = 0; i < 4; ++i) {
+            Slot& s = slots[i];
+            if (s.phase == IDLE || s.phase == DONE_POUR) continue;
+            if (!hasPowerThisTick[i]) continue;  // 无电暂停，不推进
+            s.progressMs += elapsedMs;
+            frameIndex[i] = (frameIndex[i] + 1) % 12;
+            int pct = s.totalMs > 0 ? (s.progressMs * 100) / s.totalMs : 0;
+            if (pct >= 33 && s.phase == STONING) s.phase = MILLING;
+            if (pct >= 83 && s.phase == MILLING) s.phase = DONE_POUR;
+            if (s.progressMs >= s.totalMs) {
+                s.phase = DONE_POUR;
+                s.resultCount = recipes[s.recipeIndex].crushedAmount;
+            }
+        }
+    }
+
+    int getProgressPct(int slotIdx) const {
+        if (slotIdx < 0 || slotIdx >= 4) return 0;
+        const Slot& s = slots[slotIdx];
+        if (s.phase == IDLE) return 0;
+        if (s.phase == DONE_POUR) return 100;
+        return s.totalMs > 0 ? (s.progressMs * 100) / s.totalMs : 0;
+    }
+};
+
+// OreWasher 洗矿槽：单槽，耗电 2 EU/tick，1 crushed → 1 purified + 1 sand + 30% 稀有
+class OreWasher {
+public:
+    enum AnimState { Idle, Washing, Done };
+    struct Recipe {
+        string name;
+        string crushedName;
+        string purifiedName;
+        string byproduct;
+        int byproductAmount;
+        int rareChance;        // 百分比 0-100
+        string rareByproduct;
+        int rareAmount;
+        int durationMs;
+    };
+
+private:
+    AnimState animState = Idle;
+    bool isRunning = false;
+    bool hasPowerThisTick = true;
+    int progress = 0;
+    int accumulatedMs = 0;
+    int totalMs = 5000;
+    int selectedRecipe = 0;
+    int loadedRecipe = 0;
+    int frameIndex = 0;
+    string lastByproduct;
+    string lastRareByproduct;
+    int lastRareAmount = 0;
+
+    vector<Recipe> recipes = {
+        {"Wash Hematite",    "crushed_hematite",    "purified_hematite",    "sand", 1, 30, "copper_dust", 1, 5000},
+        {"Wash Magnetite",   "crushed_magnetite",   "purified_magnetite",   "sand", 1, 30, "copper_dust", 1, 5000},
+        {"Wash Bauxite",     "crushed_bauxite",     "purified_bauxite",     "sand", 1, 30, "rare_dust",   1, 5000},
+        {"Wash Cassiterite", "crushed_cassiterite", "purified_cassiterite", "sand", 1, 30, "rare_dust",   1, 5000},
+        {"Wash Malachite",   "crushed_malachite",   "purified_malachite",   "sand", 1, 40, "copper_dust", 1, 5000},
+        {"Wash Chalcopyrite","crushed_chalcopyrite","purified_chalcopyrite","sand", 1, 40, "copper_dust", 1, 5000},
+        {"Wash Gold",        "crushed_gold",        "purified_gold",        "sand", 1, 50, "rare_dust",   1, 5000},
+        {"Wash Silver",      "crushed_silver",      "purified_silver",      "sand", 1, 50, "rare_dust",   1, 5000}
+    };
+
+public:
+    AnimState getAnimState() const { return animState; }
+    bool getRunning() const { return isRunning; }
+    void setRunning(bool r) { isRunning = r; }
+    bool getHasPowerThisTick() const { return hasPowerThisTick; }
+    void setHasPowerThisTick(bool p) { hasPowerThisTick = p; }
+    int getProgress() const { return progress; }
+    int getSelectedRecipe() const { return selectedRecipe; }
+    void setSelectedRecipe(int r) { if (r >= 0 && r < (int)recipes.size()) selectedRecipe = r; }
+    int getRecipeCount() const { return (int)recipes.size(); }
+    const Recipe& getRecipe(int i) const { return recipes[i]; }
+    int getFrameIndex() const { return frameIndex; }
+    string getLastByproduct() const { return lastByproduct; }
+    string getLastRareByproduct() const { return lastRareByproduct; }
+    int getLastRareAmount() const { return lastRareAmount; }
+
+    vector<string> getRecipeList() const {
+        vector<string> v;
+        for (auto& r : recipes) {
+            v.push_back(r.name + "  (" + r.crushedName + " -> " + r.purifiedName + ")");
+        }
+        return v;
+    }
+
+    bool canLoad(PlayerData& p) const {
+        if (animState != Idle) return false;
+        const Recipe& r = recipes[selectedRecipe];
+        return p.hasItem(r.crushedName, 1);
+    }
+
+    bool loadMaterials(PlayerData& p) {
+        if (!canLoad(p)) return false;
+        Recipe& r = recipes[selectedRecipe];
+        p.removeItem(r.crushedName, 1);
+        animState = Washing;
+        loadedRecipe = selectedRecipe;
+        progress = 0;
+        accumulatedMs = 0;
+        totalMs = r.durationMs;
+        isRunning = true;
+        lastByproduct = "";
+        lastRareByproduct = "";
+        lastRareAmount = 0;
+        return true;
+    }
+
+    bool collect(PlayerData& p) {
+        if (animState != Done) return false;
+        Recipe& r = recipes[loadedRecipe];
+        p.addItem(r.purifiedName, 1, "purified", 12);
+        p.addItem(r.byproduct, r.byproductAmount, "material", itemPrice(r.byproduct));
+        if (lastRareAmount > 0 && !lastRareByproduct.empty()) {
+            p.addItem(lastRareByproduct, lastRareAmount, "material", itemPrice(lastRareByproduct));
+        }
+        animState = Idle;
+        progress = 0;
+        accumulatedMs = 0;
+        isRunning = false;
+        return true;
+    }
+
+    void update(PlayerData& p, int elapsedMs = 100) {
+        if (animState != Washing) return;
+        if (!hasPowerThisTick) { isRunning = false; return; }
+        isRunning = true;
+        accumulatedMs += elapsedMs;
+        frameIndex = (frameIndex + 1) % 8;
+        progress = totalMs > 0 ? (accumulatedMs * 100) / totalMs : 0;
+        if (accumulatedMs >= totalMs) {
+            Recipe& r = recipes[loadedRecipe];
+            lastByproduct = r.byproduct;
+            // 判定稀有副产物
+            if (r.rareChance > 0 && (rand() % 100) < r.rareChance) {
+                lastRareByproduct = r.rareByproduct;
+                lastRareAmount = r.rareAmount;
+            } else {
+                lastRareByproduct = "";
+                lastRareAmount = 0;
+            }
+            animState = Done;
+            progress = 100;
+            isRunning = false;
+        }
+    }
+};
+
+// Centrifuge 离心机：单槽，耗电 8 EU/tick，1 purified → 1 dust + 50% 稀有
+class Centrifuge {
+public:
+    enum AnimState { Idle, Spinning, Done };
+    struct Recipe {
+        string name;
+        string purifiedName;
+        string dustName;
+        int rareChance;
+        string rareByproduct;
+        int rareAmount;
+        int durationMs;
+    };
+
+private:
+    AnimState animState = Idle;
+    bool isRunning = false;
+    bool hasPowerThisTick = true;
+    int progress = 0;
+    int accumulatedMs = 0;
+    int totalMs = 15000;
+    int selectedRecipe = 0;
+    int loadedRecipe = 0;
+    int frameIndex = 0;
+    string lastRareByproduct;
+    int lastRareAmount = 0;
+
+    vector<Recipe> recipes = {
+        {"Spin Hematite",    "purified_hematite",    "hematite_dust",    30, "copper_dust", 1, 15000},
+        {"Spin Magnetite",   "purified_magnetite",   "magnetite_dust",   30, "copper_dust", 1, 15000},
+        {"Spin Bauxite",     "purified_bauxite",     "bauxite_dust",     40, "rare_dust",   1, 15000},
+        {"Spin Cassiterite", "purified_cassiterite", "cassiterite_dust", 40, "rare_dust",   1, 15000},
+        {"Spin Malachite",   "purified_malachite",   "malachite_dust",   50, "copper_dust", 1, 15000},
+        {"Spin Chalcopyrite","purified_chalcopyrite","chalcopyrite_dust",50, "copper_dust", 1, 15000},
+        {"Spin Gold",        "purified_gold",        "gold_dust",        60, "rare_dust",   1, 15000},
+        {"Spin Silver",      "purified_silver",      "silver_dust",      60, "rare_dust",   1, 15000}
+    };
+
+public:
+    AnimState getAnimState() const { return animState; }
+    bool getRunning() const { return isRunning; }
+    void setRunning(bool r) { isRunning = r; }
+    bool getHasPowerThisTick() const { return hasPowerThisTick; }
+    void setHasPowerThisTick(bool p) { hasPowerThisTick = p; }
+    int getProgress() const { return progress; }
+    int getSelectedRecipe() const { return selectedRecipe; }
+    void setSelectedRecipe(int r) { if (r >= 0 && r < (int)recipes.size()) selectedRecipe = r; }
+    int getRecipeCount() const { return (int)recipes.size(); }
+    const Recipe& getRecipe(int i) const { return recipes[i]; }
+    int getFrameIndex() const { return frameIndex; }
+    string getLastRareByproduct() const { return lastRareByproduct; }
+    int getLastRareAmount() const { return lastRareAmount; }
+
+    vector<string> getRecipeList() const {
+        vector<string> v;
+        for (auto& r : recipes) {
+            v.push_back(r.name + "  (" + r.purifiedName + " -> " + r.dustName + ")");
+        }
+        return v;
+    }
+
+    bool canLoad(PlayerData& p) const {
+        if (animState != Idle) return false;
+        const Recipe& r = recipes[selectedRecipe];
+        return p.hasItem(r.purifiedName, 1);
+    }
+
+    bool loadMaterials(PlayerData& p) {
+        if (!canLoad(p)) return false;
+        Recipe& r = recipes[selectedRecipe];
+        p.removeItem(r.purifiedName, 1);
+        animState = Spinning;
+        loadedRecipe = selectedRecipe;
+        progress = 0;
+        accumulatedMs = 0;
+        totalMs = r.durationMs;
+        isRunning = true;
+        lastRareByproduct = "";
+        lastRareAmount = 0;
+        return true;
+    }
+
+    bool collect(PlayerData& p) {
+        if (animState != Done) return false;
+        Recipe& r = recipes[loadedRecipe];
+        p.addItem(r.dustName, 1, "dust", 18);
+        if (lastRareAmount > 0 && !lastRareByproduct.empty()) {
+            p.addItem(lastRareByproduct, lastRareAmount, "material", itemPrice(lastRareByproduct));
+        }
+        animState = Idle;
+        progress = 0;
+        accumulatedMs = 0;
+        isRunning = false;
+        return true;
+    }
+
+    void update(PlayerData& p, int elapsedMs = 100) {
+        if (animState != Spinning) return;
+        if (!hasPowerThisTick) { isRunning = false; return; }
+        isRunning = true;
+        accumulatedMs += elapsedMs;
+        frameIndex = (frameIndex + 1) % 10;
+        progress = totalMs > 0 ? (accumulatedMs * 100) / totalMs : 0;
+        if (accumulatedMs >= totalMs) {
+            Recipe& r = recipes[loadedRecipe];
+            if (r.rareChance > 0 && (rand() % 100) < r.rareChance) {
+                lastRareByproduct = r.rareByproduct;
+                lastRareAmount = r.rareAmount;
+            } else {
+                lastRareByproduct = "";
+                lastRareAmount = 0;
+            }
+            animState = Done;
+            progress = 100;
+            isRunning = false;
+        }
     }
 };
 
@@ -1289,7 +1712,7 @@ public:
             Color col = paused ? Color::GrayLight : Color::Green;
             return hbox({ text("  "), text(bar) | color(col),
                 text("  "), text(percent),
-                paused ? text("   ⚠ PAUSED (no power)") | color(Color::Yellow)
+                paused ? text("   ! PAUSED (no power)") | color(Color::Yellow)
                        : filler() });
             });
 
@@ -1362,7 +1785,7 @@ public:
                 eInfo.push_back(hbox({ text(" Mold:     ") | bold,
                     text(lathe.getMoldInfo()) | color(Color::Green) }));
                 if (paused) {
-                    eInfo.push_back(text("⚠ PAUSED: No power. Feed coal at thermal generators!")
+                    eInfo.push_back(text("! PAUSED: No power. Feed coal at thermal generators!")
                                     | color(Color::Yellow) | bold);
                 }
                 return vbox({
@@ -1758,12 +2181,18 @@ public:
 
         // ===== 布局：顶部 Tab，左侧菜单，右侧详情+按钮 =====
         // tabBar 必须挂进 main 容器，否则键盘焦点进不去（之前 BUY 选不了的根因之二）。
-        // menuSell / menuBuy 用 Maybe 门控，让非当前 tab 的 Menu 失活。
+        // menuSell / menuBuy / 各按钮都用 Maybe 门控：非当前 tab 的组件失活，
+        // 从焦点链移除。否则 BUY tab 时 SELL 按钮仍是活跃焦点目标但不可见，
+        // 用户按 Enter 会命中幽灵按钮（内部 tabSelected 守卫直接 return → "没效果"）。
         auto main = Container::Vertical({
             tabBar,
-            Maybe(menuSell, showSellTab),
-            Maybe(menuBuy,  showBuyTab),
-            buttonSellOne, buttonSellAll, buttonSellEverything, buttonBuyOne, buttonClose,
+            Maybe(menuSell,           showSellTab),
+            Maybe(menuBuy,            showBuyTab),
+            Maybe(buttonSellOne,      showSellTab),
+            Maybe(buttonSellAll,      showSellTab),
+            Maybe(buttonSellEverything, showSellTab),
+            Maybe(buttonBuyOne,       showBuyTab),
+            buttonClose,
         });
 
         mainContainer = Renderer(main, [&, menuSell, menuBuy] {
@@ -1843,8 +2272,14 @@ private:
     int globalEU = 0;
     bool gen_blueprint_unlocked = false;
     bool wire_blueprint_unlocked = false;
+    bool crusher_blueprint_unlocked = false;
+    bool washer_blueprint_unlocked = false;
+    bool centrifuge_blueprint_unlocked = false;
     vector<MachineMeta> machineMeta;
     map<pair<int, int>, PowerGenerator> generators;
+    map<pair<int, int>, Crusher> crushers;
+    map<pair<int, int>, OreWasher> washers;
+    map<pair<int, int>, Centrifuge> centrifuges;
     set<pair<int, int>> poweredMachines;
 
     bool powerDraw(int eu, pair<int, int> machineXY) {
@@ -1866,7 +2301,7 @@ private:
     vector<TutorialStep> tutorials = {
         {"Move & Explore", "Use WASD keys to move on the map\nTry moving to nearby water sources or mining spots", "move", false},
         {"Collect Resources", "Move into a hidden deposit and strike it 3 times with WASD\nFind hematite, magnetite, or coal first", "collect", false},
-        {"Craft Items", "Press C to open the crafting menu\nTry crafting steel (Hematite x2 + Coal x1)", "craft", false},
+        {"Check Backpack", "Press C to open your backpack\nView your ores, fuels, steel parts and blueprints", "craft", false},
         {"Trading System", "Press T to open the trading menu\nSell your steel for coins", "trade", false},
         {"Blast Furnace", "Press F to open the furnace interface\nSmelt metals using ores and coal", "furnace", false}
     };
@@ -1879,7 +2314,7 @@ private:
     bool saveGame(int slot) {
         ofstream output(savePath(slot));
         if (!output) return false;
-        output << "CHEMICAL_WORLD_SAVE 3\n";
+        output << "CHEMICAL_WORLD_SAVE 4\n";
         output << player.name << '\n' << player.level << ' ' << player.coins << ' '
             << player.exp << ' ' << player.x << ' ' << player.y << '\n';
         output << static_cast<int>(currentArea) << '\n';
@@ -1891,10 +2326,13 @@ private:
         output << '\n';
         gameMap.save(output);
 
-        // === v3 追加段 ===
+        // === v4 追加段（5 个蓝图状态：gen/wire 沿用 v3 前缀，crusher/washer/centrifuge 为 v4 新增）===
         int tmp = 0;
-        tmp = gen_blueprint_unlocked ? 1 : 0;   output << tmp << ' ';
-        tmp = wire_blueprint_unlocked ? 1 : 0;  output << tmp << '\n';
+        tmp = gen_blueprint_unlocked ? 1 : 0;          output << tmp << ' ';
+        tmp = wire_blueprint_unlocked ? 1 : 0;         output << tmp << ' ';
+        tmp = crusher_blueprint_unlocked ? 1 : 0;      output << tmp << ' ';
+        tmp = washer_blueprint_unlocked ? 1 : 0;       output << tmp << ' ';
+        tmp = centrifuge_blueprint_unlocked ? 1 : 0;   output << tmp << '\n';
         output << globalEU << '\n';
 
         // 把 generators 燃烧数据同步进 machineMeta 再统一保存
@@ -1922,7 +2360,7 @@ private:
         string header;
         int version = 0;
         if (!input || !(input >> header >> version) || header != "CHEMICAL_WORLD_SAVE" ||
-            (version != 2 && version != 3)) return false;
+            (version != 2 && version != 3 && version != 4)) return false;
         if (!(input >> player.name >> player.level >> player.coins >> player.exp >> player.x >> player.y)) return false;
         int savedArea = 0;
         if (!(input >> savedArea) || savedArea < 0 || savedArea > 2) return false;
@@ -1946,12 +2384,18 @@ private:
         for (const auto& tutorial : tutorials) if (!tutorial.completed) tutorialActive = true;
         if (!gameMap.load(input)) return false;
 
-        // === v2/v3 新字段 ===
+        // === v2/v3/v4 新字段 ===
         gen_blueprint_unlocked = false;
         wire_blueprint_unlocked = false;
+        crusher_blueprint_unlocked = false;
+        washer_blueprint_unlocked = false;
+        centrifuge_blueprint_unlocked = false;
         globalEU = 0;
         machineMeta.clear();
         generators.clear();
+        crushers.clear();
+        washers.clear();
+        centrifuges.clear();
         poweredMachines.clear();
         furnace = BlastFurnace{};
         lathe = Lathe{};
@@ -1965,14 +2409,20 @@ private:
                 }
             }
         }
-        if (version == 3) {
+        if (version == 3 || version == 4) {
             int tmp = 0;
             if (!(input >> tmp)) return false; gen_blueprint_unlocked = !!tmp;
             if (!(input >> tmp)) return false; wire_blueprint_unlocked = !!tmp;
+            // v4 追加 3 个新机器蓝图；v3 存档无此字段，保持默认 false
+            if (version >= 4) {
+                if (!(input >> tmp)) return false; crusher_blueprint_unlocked = !!tmp;
+                if (!(input >> tmp)) return false; washer_blueprint_unlocked = !!tmp;
+                if (!(input >> tmp)) return false; centrifuge_blueprint_unlocked = !!tmp;
+            }
             if (!(input >> globalEU)) return false;
             size_t metaCount = 0;
             if (!(input >> metaCount)) return false;
-            machineMeta.clear();  // v3 的 meta 覆盖上面的扫描默认
+            machineMeta.clear();  // v3/v4 的 meta 覆盖上面的扫描默认
             for (size_t i = 0; i < metaCount; ++i) {
                 MachineMeta m;
                 if (!(input >> m.x >> m.y >> m.type >> m.remainingBurnEU >> m.loadedCoal >> tmp)) return false;
@@ -1985,6 +2435,8 @@ private:
                     g.active = m.active;
                     generators[{m.x, m.y}] = g;
                 }
+                // X/W/R 机器实例在打开各自 UI 时按 find-or-insert 重建，
+                // 这里只需保留 machineMeta 条目（用于 E 键查找与地图渲染）。
             }
         }
         return true;
@@ -2009,7 +2461,13 @@ private:
         globalEU = 0;
         gen_blueprint_unlocked = false;
         wire_blueprint_unlocked = false;
+        crusher_blueprint_unlocked = false;
+        washer_blueprint_unlocked = false;
+        centrifuge_blueprint_unlocked = false;
         generators.clear();
+        crushers.clear();
+        washers.clear();
+        centrifuges.clear();
         poweredMachines.clear();
         machineMeta.clear();
         machineMeta.push_back({ 5, 5, 'F', 0, 0, false });   // BlastFurnace 左上 (5,5)
@@ -2159,81 +2617,171 @@ private:
         }
     }
 
-    // 合成系统
-    void craft() {
-        vector<string> options = { "Steel (Hematite x2 + Coal x1)", "Glass (Sand x2 + Coal x1)", "Back" };
+    // 背包界面（FTXUI 图形化）：C 键打开，左侧分类物品列表 + 右侧详情
+    void openBackpack() {
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        CONSOLE_CURSOR_INFO cursorInfo;
+        GetConsoleCursorInfo(hConsole, &cursorInfo);
+        cursorInfo.bVisible = false;
+        SetConsoleCursorInfo(hConsole, &cursorInfo);
+
+        auto screen = ScreenInteractive::Fullscreen();
+
+        // 分类顺序（人性化命名 + 颜色）
+        struct CatInfo { string key; string label; Color color; };
+        vector<CatInfo> cats = {
+            { "ore",      "ORES / MINERALS",   Color::Yellow },
+            { "fuel",     "FUELS",              Color::Red },
+            { "material", "MATERIALS",          Color::Cyan },
+            { "product",  "STEEL PARTS",        Color::Green },
+            { "blueprint","BLUEPRINTS",         Color::Magenta },
+            { "misc",     "MISC",               Color::GrayDark },
+        };
+
         int selected = 0;
-        bool crafting = true;
+        Component menu;
+        vector<string> labels;  // 每个条目 "name xqty  [category]"
 
-        while (crafting) {
-            cls();
-            setcolor(COLOR_CYAN);
-            cout << "========================================\n";
-            cout << "|          % Crafting Menu           |\n";
-            cout << "========================================\n\n";
-            setcolor(COLOR_RESET);
-
-            for (size_t i = 0; i < options.size(); i++) {
-                if (i == (size_t)selected) {
-                    setcolor(COLOR_YELLOW);
-                    cout << " >> " << options[i] << " <<\n";
-                    setcolor(COLOR_RESET);
+        // 分类汇总当前可显示条目（数量 > 0）
+        auto rebuild = [&]() {
+            labels.clear();
+            for (auto& c : cats) {
+                bool catHasItem = false;
+                for (auto& it : player.inventory) {
+                    if (it.quantity > 0 && it.category == c.key) {
+                        labels.push_back("  " + it.name + "  x" + to_string(it.quantity) + "  [" + c.key + "]");
+                        catHasItem = true;
+                    }
                 }
-                else {
-                    cout << "    " << options[i] << "\n";
+                if (!catHasItem) {
+                    labels.push_back("  (none in " + c.key + ")");
+                }
+            }
+            if (labels.empty()) {
+                labels.push_back("  (backpack empty)");
+            }
+            if (selected >= (int)labels.size()) selected = 0;
+        };
+        rebuild();
+
+        menu = Menu(&labels, &selected);
+
+        // 关闭按钮
+        Component buttonClose = Button("CLOSE", [&] { screen.ExitLoopClosure()(); });
+        auto buttons = Container::Vertical({ buttonClose });
+
+        // 主容器：menu + 按钮（焦点链）
+        auto layout = Container::Vertical({ menu, buttons });
+
+        Component view = Renderer(layout, [&] {
+            // 找到选中的实际 InventoryItem（跳过分隔行 "(none...)"）
+            InventoryItem* sel = nullptr;
+            int idx = 0;
+            for (auto& c : cats) {
+                bool catHasItem = false;
+                for (auto& it : player.inventory) {
+                    if (it.quantity > 0 && it.category == c.key) {
+                        if (idx == selected) { sel = &it; break; }
+                        idx++;
+                        catHasItem = true;
+                    }
+                }
+                if (!catHasItem) idx++;  // 跳过 "(none)" 占位
+                if (sel) break;
+            }
+
+            // 左侧列表：用分类标题分组渲染（不是所有 labels 直接 dump）
+            Elements leftRows;
+            leftRows.push_back(text(" BACKPACK") | bold | color(Color::Yellow));
+            leftRows.push_back(separator());
+            int row = 0;
+            for (auto& c : cats) {
+                leftRows.push_back(text("[" + c.label + "]") | bold | color(c.color));
+                bool any = false;
+                for (auto& it : player.inventory) {
+                    if (it.quantity > 0 && it.category == c.key) {
+                        string prefix = (row == selected) ? " > " : "   ";
+                        Color rowCol = (row == selected) ? Color::Yellow : Color::White;
+                        leftRows.push_back(hbox({
+                            text(prefix) | color(rowCol),
+                            text(it.name + "  x" + to_string(it.quantity)) | color(rowCol),
+                        }));
+                        row++;
+                        any = true;
+                    }
+                }
+                if (!any) {
+                    leftRows.push_back(text("   (empty)") | color(Color::GrayDark));
+                    row++;
                 }
             }
 
-            cout << "\nInventory:\n";
-            cout << "  Hematite: " << player.getItemCount("hematite") << "\n";
-            cout << "  Coal: " << player.getItemCount("coal") << "\n";
-            cout << "  Sand: " << player.getItemCount("sand") << "\n";
-            cout << "\n[UP][DOWN] Select, [ENTER] Confirm, [ESC] Back\n";
+            // 右侧详情面板
+            Component detail;
+            if (sel) {
+                string catLabel = sel->category;
+                for (auto& c : cats) if (c.key == sel->category) { catLabel = c.label; break; }
+                detail = Renderer([&, sel, catLabel] {
+                    return vbox({
+                        text(" ITEM DETAILS") | bold | color(Color::Cyan),
+                        separator(),
+                        text("  Name:     " + sel->name) | bold,
+                        text("  Category: " + catLabel),
+                        text("  Quantity: x" + to_string(sel->quantity)) | color(Color::Yellow),
+                        text("  Value:    " + to_string(sel->value) + " coins each"),
+                        text("  Total:    " + to_string(sel->value * sel->quantity) + " coins"),
+                        separator(),
+                        text("  Tip: Trade at T (SELL) to convert items to coins.") | color(Color::GrayDark),
+                        text("       Feed coal to generator (E) or load furnace (E) to use.") | color(Color::GrayDark),
+                    });
+                });
+            }
+            else {
+                detail = Renderer([&, sel] {
+                    return vbox({
+                        text(" ITEM DETAILS") | bold | color(Color::Cyan),
+                        separator(),
+                        text("  (no item selected)") | color(Color::GrayDark),
+                        text("  Use UP/DOWN on the list, then read details here.") | color(Color::GrayDark),
+                    });
+                });
+            }
 
-            int key = _getch();
-            if (key == 224) {
-                key = _getch();
-                if (key == 72) selected = (selected - 1 + options.size()) % options.size();
-                else if (key == 80) selected = (selected + 1) % options.size();
+            return vbox({
+                text("            # BACKPACK [C] #") | bold | color(Color::Yellow),
+                separator(),
+                hbox({
+                    vbox(leftRows) | flex,
+                    separator(),
+                    detail->Render() | flex,
+                }),
+                separator(),
+                text("Total items: " + to_string(player.inventory.size()) +
+                     "   Coins: " + to_string(player.coins) +
+                     "   Level: " + to_string(player.level) +
+                     "   EU: " + to_string(globalEU)) | color(Color::Green),
+                separator(),
+                buttons->Render() | center,
+                text("Tip: UP/DOWN select item, TAB to CLOSE button, ESC to exit.") | color(Color::GrayDark),
+            }) | border | size(WIDTH, GREATER_THAN, 80);
+        });
+
+        // ESC 关闭
+        view = view | CatchEvent([&](Event e) {
+            if (e == Event::Escape) {
+                screen.ExitLoopClosure()();
+                return true;
             }
-            else if (key == 27) {
-                crafting = false;
-            }
-            else if (key == 13) {
-                if (selected == 0) {
-                    if (player.hasItem("hematite", 2) && player.hasItem("coal", 1)) {
-                        player.removeItem("hematite", 2);
-                        player.removeItem("coal", 1);
-                        player.addItem("steel", 1, "product", 30);
-                        player.exp += 10;
-                        message = "! Crafted steel!";
-                        checkTutorialProgress("craft");
-                        checkLevelUp();
-                        crafting = false;
-                    }
-                    else {
-                        message = "X Not enough materials! Need Hematite x2 + Coal x1";
-                    }
-                }
-                else if (selected == 1) {
-                    if (player.hasItem("sand", 2) && player.hasItem("coal", 1)) {
-                        player.removeItem("sand", 2);
-                        player.removeItem("coal", 1);
-                        player.addItem("glass", 1, "product", 15);
-                        player.exp += 8;
-                        message = "! Crafted glass!";
-                        checkLevelUp();
-                        crafting = false;
-                    }
-                    else {
-                        message = "X Not enough materials! Need Sand x2 + Coal x1";
-                    }
-                }
-                else {
-                    crafting = false;
-                }
-            }
-        }
+            return false;
+        });
+
+        screen.Loop(view);
+
+        cursorInfo.bVisible = true;
+        SetConsoleCursorInfo(hConsole, &cursorInfo);
+        checkTutorialProgress("craft");
+        message = "& Backpack closed.";
+        cls();
     }
 
     // 交易系统（FTXUI 图形化界面）
@@ -2411,27 +2959,39 @@ private:
             cout << '\n';
         }
 
-        setcolor(COLOR_GREEN);
-        cout << "\n  ";
+        // ===== 图例（按区域显示实际出现的符号；矿石仅出现在 Wasteland/Cave）=====
         setcolor(COLOR_RESET);
-        cout << "P=Player ";
-        setcolor(COLOR_GREEN);
-        cout << ".=Grass ";
-        setcolor(COLOR_DARK_GREEN);
-        cout << "T=Tree ";
-        setcolor(COLOR_GREY);
-        cout << "S=Stone ";
-        setcolor(COLOR_BLUE);
-        cout << "~=Salt ~  ";
-        cout << "=Rock ";
-        if (currentArea == Area::Home) cout << "F=Furnace L=Lathe C=Car a=Animal ";
-        else cout << "O=Cave entrance ";
-        setcolor(COLOR_DARK_RED);
-        cout << "H=Hematite M=Magnetite B=Bauxite ";
-        cout << "T=Cassiterite P=Malachite U=Chalcopyrite ";
-        cout << "G=Gold A=Silver ";
-        setcolor(COLOR_DARK_YELLOW);
-        cout << "C=Coal\n";
+        cout << "\n  Legend:  ";
+        setcolor(COLOR_YELLOW); cout << "P=You  ";
+        setcolor(COLOR_GREEN);  cout << ".=Grass  ";
+        if (currentArea == Area::Home) {
+            setcolor(COLOR_DARK_GREEN); cout << "t=Tree  v=Grass_tuft  ";
+            setcolor(COLOR_BLUE);     cout << "~=Water  ";
+            setcolor(COLOR_YELLOW);   cout << "*=Flower  a=Animal  |  ";
+            setcolor(COLOR_RED);      cout << "F=Furnace  ";
+            setcolor(COLOR_PURPLE);   cout << "L=Lathe  ";
+            setcolor(COLOR_DARK_RED); cout << "G=Generator  ";
+            setcolor(COLOR_YELLOW);   cout << "X=Crusher  ";
+            setcolor(COLOR_CYAN);     cout << "W=Washer  ";
+            setcolor(COLOR_PURPLE);   cout << "R=Centrifuge  ";
+            setcolor(COLOR_BLUE);     cout << "+=Wire  ";
+            setcolor(COLOR_YELLOW);   cout << "C=Car(travel)";
+        } else {
+            if (currentArea == Area::Wasteland) {
+                setcolor(COLOR_DARK_YELLOW); cout << "=Dry_ground  ";
+                setcolor(COLOR_LIGHT_WHITE); cout << "~=Salt_Flats  ";
+                setcolor(COLOR_RED);     cout << "^=Red_Dune  ";
+                setcolor(COLOR_YELLOW);  cout << "C=Car  ";
+                setcolor(COLOR_CYAN);    cout << "O=Cave_entrance  |  ";
+            } else {
+                setcolor(COLOR_GREY);  cout << "=Cave_floor  ";
+                setcolor(COLOR_CYAN);  cout << "O=Cave_exit  |  ";
+            }
+            setcolor(COLOR_GREY);     cout << "==Rock  ";
+            setcolor(COLOR_DARK_RED); cout << "Ore: H=Hematite M=Magnetite B=Bauxite T=Cassiterite P=Malachite U=Chalcopyrite G=Gold S=Silver C=Coal";
+            if (currentArea == Area::Wasteland) cout << " (C also=Car)";
+        }
+        cout << "\n";
         setcolor(COLOR_RESET);
     }
 
@@ -2494,9 +3054,10 @@ private:
         cout << "==================================================\n";
         setcolor(COLOR_GREEN);
         cout << "  WASD  - Move\n";
-        cout << "  E     - Interact nearby (mine/enter/use)\n";
-        cout << "  C     - Crafting menu\n";
-        cout << "  T     - Trading market\n";
+        cout << "  E     - Interact nearby (mine/enter/use machine)\n";
+        cout << "  C     - Open backpack\n";
+        cout << "  T     - Trading market (buy blueprints/sell goods)\n";
+        cout << "  B     - Build menu (home only): place generator/wire/machines/decor\n";
         cout << "  F     - Hint only; use E beside furnace at home\n";
         cout << "  H     - Show help\n";
         cout << "  P     - Save to active manual slot\n";
@@ -2556,6 +3117,22 @@ private:
                     return;
                 }
             }
+            // Crusher / Washer / Centrifuge interaction
+            {
+                pair<int, int> mpos;
+                if (currentArea == Area::Home && findNearbyMachine('X', player.x, player.y, mpos)) {
+                    openCrusherUI(mpos.first, mpos.second);
+                    return;
+                }
+                if (currentArea == Area::Home && findNearbyMachine('W', player.x, player.y, mpos)) {
+                    openWasherUI(mpos.first, mpos.second);
+                    return;
+                }
+                if (currentArea == Area::Home && findNearbyMachine('R', player.x, player.y, mpos)) {
+                    openCentrifugeUI(mpos.first, mpos.second);
+                    return;
+                }
+            }
             for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) {
                 if (abs(dx) + abs(dy) == 1 && gameMap.getTile(player.x + dx, player.y + dy).mineral != "") {
                     if (gameMap.mineAt(player, player.x + dx, player.y + dy)) {
@@ -2568,7 +3145,7 @@ private:
             message = "Nothing nearby to interact with.";
             return;
         case 'c': case 'C':
-            craft();
+            openBackpack();
             return;
         case 't': case 'T':
             trade();
@@ -2634,39 +3211,18 @@ private:
             poweredMachines.insert(kv.first);
         }
 
-        // 2) 同时把 F/L 机器 2×2 四格作为"潜在电网扩展点"——即使没电，它们和电线相邻也要扩展
-        for (auto& m : machineMeta) {
-            if (m.type == 'F' || m.type == 'L' || m.type == 'G') {
-                for (int dy = 0; dy < 2; ++dy) for (int dx = 0; dx < 2; ++dx) {
-                    int x = m.x + dx, y = m.y + dy;
-                    if (x >= 0 && x < W && y >= 0 && y < H) {
-                        // 只标记 visited（若旁边有发电机/电线，就会连上）
-                    }
-                }
-            }
-        }
-
-        // 3) 标准 BFS，沿 '+' 电线 4 邻扩展；另外遇到机器格（大写/小写字母辅格）也扩展
+        // 2) 标准 BFS，沿 '+' 电线 4 邻扩展；机器格（F/f/L/l/G/g）也是导体，会被
+        //    自然发现并继续扩展（电可以穿过机器传导）。
+        //    注意：不能像旧版那样把所有机器格无条件塞进 visited——那会让所有机器
+        //    永远"已访问"，step 4 永远判定通电，电线形同虚设。
         auto isConductive = [&](int x, int y) -> bool {
             if (x < 0 || x >= W || y < 0 || y >= H) return false;
             char d = gameMap.getTileDisplay(x, y);
             if (d == '+') return true;
             if (d == 'F' || d == 'f' || d == 'L' || d == 'l' || d == 'G' || d == 'g') return true;
+            if (d == 'X' || d == 'x' || d == 'W' || d == 'w' || d == 'R' || d == 'r') return true;
             return false;
         };
-
-        // 把所有机器四格先入 visited，便于扩展时不会漏
-        auto seedMachineCells = [&]() {
-            for (auto& m : machineMeta) {
-                if (m.type == 'F' || m.type == 'L' || m.type == 'G') {
-                    for (int dy = 0; dy < 2; ++dy) for (int dx = 0; dx < 2; ++dx) {
-                        int x = m.x + dx, y = m.y + dy;
-                        if (x >= 0 && x < W && y >= 0 && y < H) visited.insert({ x,y });
-                    }
-                }
-            }
-        };
-        seedMachineCells();
 
         static const int DX[4] = { 1,-1,0,0 };
         static const int DY[4] = { 0,0,1,-1 };
@@ -2683,7 +3239,8 @@ private:
 
         // 4) 对于每个 F/L 机器，如果它的 4 格中有任何 1 格被 BFS visit 过，则认为通电
         for (auto& m : machineMeta) {
-            if (m.type == 'F' || m.type == 'L' || m.type == 'G') {
+            if (m.type == 'F' || m.type == 'L' || m.type == 'G' ||
+                m.type == 'X' || m.type == 'W' || m.type == 'R') {
                 for (int dy = 0; dy < 2; ++dy) for (int dx = 0; dx < 2; ++dx) {
                     if (visited.count({ m.x + dx, m.y + dy })) {
                         poweredMachines.insert({ m.x, m.y });
@@ -2750,29 +3307,132 @@ private:
         return true;
     }
 
-    // 找玩家邻近的发电机（按 machineMeta 查 type=='G'，并用左上格 isNear）
-    bool findNearbyGenerator(int px, int py, pair<int, int>& outPos) const {
+    // 放置 Crusher 破碎机（2×2，'X'/'x'，150c）
+    bool placeCrusher(int x, int y) {
+        if (currentArea != Area::Home) return false;
+        if (!crusher_blueprint_unlocked) return false;
+        if (player.coins < 150) return false;
+        const int W = gameMap.getWidth(), H = gameMap.getHeight();
+        if (x < 0 || x + 1 >= W || y < 0 || y + 1 >= H) return false;
+        for (int dy = 0; dy < 2; ++dy) for (int dx = 0; dx < 2; ++dx) {
+            if (gameMap.getTile(x + dx, y + dy).display != '.') return false;
+        }
+        player.coins -= 150;
+        gameMap.getTile(x, y) = { 'X', "Crusher", "Ore crusher (4 EU/slot)", false, COLOR_YELLOW };
+        gameMap.getTile(x, y + 1) = { 'x', "Crusher", "", false, COLOR_DARK_YELLOW };
+        gameMap.getTile(x + 1, y) = { 'x', "Crusher", "", false, COLOR_DARK_YELLOW };
+        gameMap.getTile(x + 1, y + 1) = { 'x', "Crusher", "", false, COLOR_DARK_YELLOW };
+        crushers[{x, y}] = Crusher{};
+        machineMeta.push_back({ x, y, 'X', 0, 0, false });
+        return true;
+    }
+
+    // 放置 OreWasher 洗矿槽（2×2，'W'/'w'，120c）
+    bool placeWasher(int x, int y) {
+        if (currentArea != Area::Home) return false;
+        if (!washer_blueprint_unlocked) return false;
+        if (player.coins < 120) return false;
+        const int W = gameMap.getWidth(), H = gameMap.getHeight();
+        if (x < 0 || x + 1 >= W || y < 0 || y + 1 >= H) return false;
+        for (int dy = 0; dy < 2; ++dy) for (int dx = 0; dx < 2; ++dx) {
+            if (gameMap.getTile(x + dx, y + dy).display != '.') return false;
+        }
+        player.coins -= 120;
+        gameMap.getTile(x, y) = { 'W', "Ore Washer", "Washes crushed ore (2 EU)", false, COLOR_CYAN };
+        gameMap.getTile(x, y + 1) = { 'w', "Ore Washer", "", false, COLOR_DARK_CYAN };
+        gameMap.getTile(x + 1, y) = { 'w', "Ore Washer", "", false, COLOR_DARK_CYAN };
+        gameMap.getTile(x + 1, y + 1) = { 'w', "Ore Washer", "", false, COLOR_DARK_CYAN };
+        washers[{x, y}] = OreWasher{};
+        machineMeta.push_back({ x, y, 'W', 0, 0, false });
+        return true;
+    }
+
+    // 放置 Centrifuge 离心机（2×2，'R'/'r'，200c）
+    bool placeCentrifuge(int x, int y) {
+        if (currentArea != Area::Home) return false;
+        if (!centrifuge_blueprint_unlocked) return false;
+        if (player.coins < 200) return false;
+        const int W = gameMap.getWidth(), H = gameMap.getHeight();
+        if (x < 0 || x + 1 >= W || y < 0 || y + 1 >= H) return false;
+        for (int dy = 0; dy < 2; ++dy) for (int dx = 0; dx < 2; ++dx) {
+            if (gameMap.getTile(x + dx, y + dy).display != '.') return false;
+        }
+        player.coins -= 200;
+        gameMap.getTile(x, y) = { 'R', "Centrifuge", "Spins purified ore to dust (8 EU)", false, COLOR_PURPLE };
+        gameMap.getTile(x, y + 1) = { 'r', "Centrifuge", "", false, COLOR_DARK_PURPLE };
+        gameMap.getTile(x + 1, y) = { 'r', "Centrifuge", "", false, COLOR_DARK_PURPLE };
+        gameMap.getTile(x + 1, y + 1) = { 'r', "Centrifuge", "", false, COLOR_DARK_PURPLE };
+        centrifuges[{x, y}] = Centrifuge{};
+        machineMeta.push_back({ x, y, 'R', 0, 0, false });
+        return true;
+    }
+
+    // 通用机器查找（2×2-aware，4 格遍历，修复旧 findNearbyGenerator 盲区）
+    bool findNearbyMachine(char type, int px, int py, pair<int, int>& outPos) const {
         if (currentArea != Area::Home) return false;
         for (auto& m : machineMeta) {
-            if (m.type != 'G') continue;
-            if (gameMap.isNear(m.x, m.y, 'G', px, py)) {
-                outPos = { m.x, m.y };
-                return true;
+            if (m.type != type) continue;
+            for (int dy = 0; dy < 2; ++dy) for (int dx = 0; dx < 2; ++dx) {
+                if (abs(m.x + dx - px) + abs(m.y + dy - py) <= 1) {
+                    outPos = { m.x, m.y };
+                    return true;
+                }
             }
         }
         return false;
     }
 
-    // 由全屏 UI 的 100ms ticker 统一调用：推进电网+高炉+车床
+    // 找玩家邻近的发电机（用通用 findNearbyMachine 修复 2×2 盲区）
+    bool findNearbyGenerator(int px, int py, pair<int, int>& outPos) const {
+        return findNearbyMachine('G', px, py, outPos);
+    }
+
+    // 由全屏 UI 的 100ms ticker 统一调用：推进电网+高炉+车床+处理链机器
     void globalTick100ms() {
         tickPowerGrid();
         furnace.update(player, 100);
         // Lathe：先扣 2 EU 并把结果写进 hasPowerThisTick 字段，
         // 内部 update() 会根据它推进进度或显示 paused。
+        // 车床坐标从 machineMeta 动态查找（不硬编码 {8,5}，否则旧存档 /
+        // 重新生成的车床位置会查不到，powerDraw 永远返回 false）。
+        pair<int, int> lathePos = { -1, -1 };
+        for (auto& m : machineMeta) {
+            if (m.type == 'L') { lathePos = { m.x, m.y }; break; }
+        }
         bool machining = (lathe.getAnimState() == Lathe::Machining ||
                           lathe.getAnimState() == Lathe::Inserting);
-        lathe.hasPowerThisTick = machining ? powerDraw(2, {8, 5}) : true;
+        if (machining && lathePos.first >= 0) {
+            lathe.hasPowerThisTick = powerDraw(2, lathePos);
+        } else {
+            lathe.hasPowerThisTick = true;
+        }
         lathe.update(player, 100);
+
+        // Crushers：每台破碎机每活跃槽单独 powerDraw(4 EU)，先到先得语义
+        for (auto& kv : crushers) {
+            auto& pos = kv.first;
+            auto& cr = kv.second;
+            for (int i = 0; i < cr.getSlotCount(); ++i) {
+                auto& s = cr.getSlot(i);
+                bool active = (s.phase != Crusher::IDLE && s.phase != Crusher::DONE_POUR);
+                cr.setSlotPower(i, active ? powerDraw(4, pos) : true);
+            }
+            cr.update(player, 100);
+        }
+        // Washers：单槽，加工中扣 2 EU
+        for (auto& kv : washers) {
+            auto& ws = kv.second;
+            bool processing = (ws.getAnimState() != OreWasher::Idle && ws.getAnimState() != OreWasher::Done);
+            ws.setHasPowerThisTick(processing ? powerDraw(2, kv.first) : true);
+            ws.update(player, 100);
+        }
+        // Centrifuges：单槽，加工中扣 8 EU
+        for (auto& kv : centrifuges) {
+            auto& cf = kv.second;
+            bool processing = (cf.getAnimState() != Centrifuge::Idle && cf.getAnimState() != Centrifuge::Done);
+            cf.setHasPowerThisTick(processing ? powerDraw(8, kv.first) : true);
+            cf.update(player, 100);
+        }
     }
 
 public:
@@ -2808,6 +3468,12 @@ public:
                 + (gen_blueprint_unlocked ? "" : "  [LOCKED: buy BP first]"));
             placeEntries.push_back(string("  Wire (1x1, 5c)")
                 + (wire_blueprint_unlocked ? "" : "  [LOCKED: buy BP first]"));
+            placeEntries.push_back(string("  Crusher (2x2, 150c)")
+                + (crusher_blueprint_unlocked ? "" : "  [LOCKED: buy BP first]"));
+            placeEntries.push_back(string("  Washer (2x2, 120c)")
+                + (washer_blueprint_unlocked ? "" : "  [LOCKED: buy BP first]"));
+            placeEntries.push_back(string("  Centrifuge (2x2, 200c)")
+                + (centrifuge_blueprint_unlocked ? "" : "  [LOCKED: buy BP first]"));
             placeEntries.push_back("  Flower (1c)");
             placeEntries.push_back("  Grass tuft (1c)");
             if (placeSelection >= (int)placeEntries.size()) placeSelection = (int)placeEntries.size() - 1;
@@ -2837,12 +3503,36 @@ public:
                 } else { statusMsg = "Cannot lay wire here."; }
                 break;
             case 2:
+                if (!crusher_blueprint_unlocked) { statusMsg = "Crusher blueprint required. Buy it from Trade > BUY."; return; }
+                if (player.coins < 150) { statusMsg = "Need 150 coins."; return; }
+                if (placeCrusher(px, py)) {
+                    statusMsg = "Crusher installed at (" + to_string(px) + "," + to_string(py) + ").";
+                    rebuildPlaceEntries();
+                } else { statusMsg = "Space is already occupied or impassable."; }
+                break;
+            case 3:
+                if (!washer_blueprint_unlocked) { statusMsg = "Washer blueprint required. Buy it from Trade > BUY."; return; }
+                if (player.coins < 120) { statusMsg = "Need 120 coins."; return; }
+                if (placeWasher(px, py)) {
+                    statusMsg = "Washer installed at (" + to_string(px) + "," + to_string(py) + ").";
+                    rebuildPlaceEntries();
+                } else { statusMsg = "Space is already occupied or impassable."; }
+                break;
+            case 4:
+                if (!centrifuge_blueprint_unlocked) { statusMsg = "Centrifuge blueprint required. Buy it from Trade > BUY."; return; }
+                if (player.coins < 200) { statusMsg = "Need 200 coins."; return; }
+                if (placeCentrifuge(px, py)) {
+                    statusMsg = "Centrifuge installed at (" + to_string(px) + "," + to_string(py) + ").";
+                    rebuildPlaceEntries();
+                } else { statusMsg = "Space is already occupied or impassable."; }
+                break;
+            case 5:
                 if (player.coins < 1) { statusMsg = "Need 1 coin."; return; }
                 if (placeDecor(px, py, '*')) {
                     statusMsg = "Planted a flower at (" + to_string(px) + "," + to_string(py) + ").";
                 } else { statusMsg = "Blocked."; }
                 break;
-            case 3:
+            case 6:
                 if (player.coins < 1) { statusMsg = "Need 1 coin."; return; }
                 if (placeDecor(px, py, 'v')) {
                     statusMsg = "Planted grass tuft at (" + to_string(px) + "," + to_string(py) + ").";
@@ -2873,6 +3563,9 @@ public:
                     else if (d == '+' || d == 'G' || d == 'g') col = Color::YellowLight;
                     else if (d == 'F' || d == 'f') col = Color::RedLight;
                     else if (d == 'L' || d == 'l') col = Color::Magenta;
+                    else if (d == 'X' || d == 'x') col = Color::Yellow;
+                    else if (d == 'W' || d == 'w') col = Color::Cyan;
+                    else if (d == 'R' || d == 'r') col = Color::MagentaLight;
                     else if (d == 'C') col = Color::Yellow;
                     else col = Color::White;
                     auto cell = text(string(1, d == '#' ? ' ' : d)) | color(col) | center;
@@ -2895,15 +3588,24 @@ public:
                         text(to_string(globalEU) + " / 10000") | color(Color::Cyan) }),
                 separator(),
                 text(" Blueprints:") | bold,
-                text("   Generator BP: " + string(gen_blueprint_unlocked ? "OWNED" : "LOCKED [150c]"))
+                text("   Generator BP:  " + string(gen_blueprint_unlocked ? "OWNED" : "LOCKED [150c]"))
                     | color(gen_blueprint_unlocked ? Color::Green : Color::Red),
-                text("   Wire BP:      " + string(wire_blueprint_unlocked ? "OWNED" : "LOCKED [50c]"))
+                text("   Wire BP:        " + string(wire_blueprint_unlocked ? "OWNED" : "LOCKED [50c]"))
                     | color(wire_blueprint_unlocked ? Color::Green : Color::Red),
+                text("   Crusher BP:      " + string(crusher_blueprint_unlocked ? "OWNED" : "LOCKED [200c]"))
+                    | color(crusher_blueprint_unlocked ? Color::Green : Color::Red),
+                text("   Washer BP:      " + string(washer_blueprint_unlocked ? "OWNED" : "LOCKED [150c]"))
+                    | color(washer_blueprint_unlocked ? Color::Green : Color::Red),
+                text("   Centrifuge BP:  " + string(centrifuge_blueprint_unlocked ? "OWNED" : "LOCKED [300c]"))
+                    | color(centrifuge_blueprint_unlocked ? Color::Green : Color::Red),
             }) | border;
         });
 
         auto buttonsBox = Container::Vertical({ buttonPlace, buttonClose });
-        auto layout = Container::Vertical({ placeMenu, buttonPlace, buttonClose });
+        // 注意：buttonPlace/buttonClose 只能属于一个 Container，否则 FTXUI 焦点
+        // 状态冲突会导致 Render() 返回空元素（按钮视觉消失）。这里 buttonsBox 是
+        // 唯一的焦点容器；layout 只放 placeMenu + buttonsBox 一个整体。
+        auto layout = Container::Vertical({ placeMenu, buttonsBox });
         mainContainer = Renderer(layout, [&, gridRenderer, infoRenderer, buttonsBox] {
             return vbox({
                 text("            # BUILD MODE [B] #") | bold | color(Color::Yellow),
@@ -2986,10 +3688,13 @@ public:
             else statusMsg = "No coal in your backpack.";
         });
         Component buttonClose = Button("CLOSE", [&] { screen.ExitLoopClosure()(); });
-        Container::Vertical({ buttonFeed, buttonClose });
+        // 之前 Container::Vertical({...}) 是悬空表达式没赋值，按钮没进焦点链 →
+        // Renderer 也只接收无子组件版本，导致按 Enter/Tab 完全不触发按钮。
+        // 修复：把 Container 赋给变量并作为 Renderer 的子组件传入。
+        auto buttons = Container::Vertical({ buttonFeed, buttonClose });
 
         Component view;
-        view = Renderer([&] {
+        view = Renderer(buttons, [&] {
             int remaining = genRef.burnEU;
             int loaded = genRef.loadedCoal;
             float burnPct = remaining >= 6400 ? 1.0f : (float)remaining / 6400.0f;
@@ -3051,6 +3756,426 @@ public:
         cls();
     }
 
+    // ===== CrusherUI：4 槽并行破碎机面板（镜像 FurnaceUI 简化版） =====
+    void openCrusherUI(int cx, int cy) {
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        CONSOLE_CURSOR_INFO cursorInfo;
+        GetConsoleCursorInfo(hConsole, &cursorInfo);
+        cursorInfo.bVisible = false;
+        SetConsoleCursorInfo(hConsole, &cursorInfo);
+
+        auto screen = ScreenInteractive::Fullscreen();
+
+        // 查找或创建 Crusher 实例
+        auto it = crushers.find({ cx, cy });
+        if (it == crushers.end()) {
+            crushers.insert({ {cx, cy}, Crusher() });
+            it = crushers.find({ cx, cy });
+        }
+        Crusher& crRef = it->second;
+
+        string statusMsg = "Crusher at (" + to_string(cx) + "," + to_string(cy) + "). Load ore to crush.";
+        int selRec = crRef.getSelectedRecipe();
+        int selSlot = crRef.getFocusedSlot();
+        vector<string> recipeLabels = crRef.getRecipeList();
+        vector<string> slotLabels = { "Slot 0", "Slot 1", "Slot 2", "Slot 3" };
+
+        Component slotTabs = Radiobox(&slotLabels, &selSlot);
+        Component recipeList = Menu(&recipeLabels, &selRec);
+        Component buttonLoad = Button("LOAD SLOT", [&] {
+            if (crRef.loadSlot(player, selSlot)) {
+                statusMsg = "Slot " + to_string(selSlot) + " loaded.";
+                crRef.setFocusedSlot(selSlot);
+            } else statusMsg = "Cannot load slot (busy or no ore).";
+        });
+        Component buttonCancel = Button("CANCEL SLOT", [&] {
+            if (crRef.cancelSlot(selSlot)) statusMsg = "Slot " + to_string(selSlot) + " cancelled.";
+            else statusMsg = "Cannot cancel (idle/done).";
+        });
+        Component buttonCollect = Button("COLLECT SLOT", [&] {
+            if (crRef.collectSlot(player, selSlot)) statusMsg = "Collected from slot " + to_string(selSlot) + ".";
+            else statusMsg = "Nothing to collect.";
+        });
+        Component buttonClose = Button("CLOSE", [&] { screen.ExitLoopClosure()(); });
+
+        auto buttons = Container::Vertical({ buttonLoad, buttonCancel, buttonCollect, buttonClose });
+        auto layout = Container::Vertical({ slotTabs, recipeList, buttons });
+
+        Component view = Renderer(layout, [&] {
+            // 同步选择状态到 crusher 实例
+            crRef.setSelectedRecipe(selRec);
+            crRef.setFocusedSlot(selSlot);
+            // 4 槽进度条
+            Elements bars;
+            for (int i = 0; i < 4; ++i) {
+                int pct = crRef.getProgressPct(i);
+                const int barW = 30;
+                int fill = (pct * barW) / 100;
+                string barFill(fill, '#'), barSpace(barW - fill, '-');
+                string phaseStr = "IDLE";
+                auto& s = crRef.getSlot(i);
+                if (s.phase == Crusher::STONING) phaseStr = "STONING";
+                else if (s.phase == Crusher::MILLING) phaseStr = "MILLING";
+                else if (s.phase == Crusher::DONE_POUR) phaseStr = "DONE";
+                bool powered = crRef.getSlotPower(i);
+                Color barCol = (s.phase == Crusher::DONE_POUR) ? Color::Green :
+                               (s.phase == Crusher::IDLE) ? Color::GrayDark :
+                               (powered ? Color::Yellow : Color::Red);
+                bars.push_back(hbox({
+                    text("S" + to_string(i) + " [" + phaseStr + "] "),
+                    text("[" + barFill + barSpace + "] ") | color(barCol),
+                    text(" " + to_string(pct) + "%"),
+                    text(powered ? "" : "  [NO POWER]") | color(Color::Red),
+                }));
+            }
+            // ASCII 动画（12 帧简版）
+            int curFrame = 0;
+            for (int i = 0; i < 4; ++i) {
+                if (crRef.getSlot(i).phase != Crusher::IDLE) {
+                    curFrame = crRef.getFrameIndex(i);
+                    break;
+                }
+            }
+            vector<string> art = {
+                "   .---.      .---.      ",
+                "  | STN |    | MILL |    ",
+                "   '---'      '---'      ",
+                "   /|\\        /|\\        ",
+                "  / | \\      / | \\      ",
+                "  \\\\|//      \\\\|//      ",
+                "   \\|/        \\|/        ",
+                "  [====]    [====]      ",
+                "   \\\\\\\\      ////      ",
+                "    \\\\\\\\    ////        ",
+                "     ''''''''            ",
+                "       CRUSHER            "
+            };
+            int af = curFrame % (int)art.size();
+            Elements artElems;
+            for (int i = 0; i < 6; ++i) {
+                int idx = (af + i) % (int)art.size();
+                artElems.push_back(text(art[idx]) | color(Color::Yellow));
+            }
+
+            return vbox({
+                text("       # CRUSHER [X] #  @(" + to_string(cx) + "," + to_string(cy) + ")") | bold | color(Color::Yellow),
+                separator(),
+                hbox({
+                    vbox({
+                        text(" SLOTS") | bold | color(Color::Cyan),
+                        separator(),
+                        slotTabs->Render(),
+                        separator(),
+                        text(" RECIPES") | bold | color(Color::Cyan),
+                        separator(),
+                        recipeList->Render() | flex,
+                    }) | size(WIDTH, GREATER_THAN, 42) | flex,
+                    separator(),
+                    vbox({
+                        text(" PROGRESS") | bold | color(Color::Cyan),
+                        separator(),
+                        vbox(bars),
+                        separator(),
+                        text(" EU Pool: " + to_string(globalEU) + " / 10000") | color(Color::Cyan),
+                        text(" Power: 4 EU/slot active") | color(Color::GrayDark),
+                        separator(),
+                        text(" ANIMATION") | bold | color(Color::Cyan),
+                        vbox(artElems) | border,
+                    }) | size(WIDTH, EQUAL, 40),
+                }),
+                separator(),
+                buttons->Render() | center,
+                separator(),
+                text(statusMsg) | color(Color::Green),
+            }) | border | size(WIDTH, GREATER_THAN, 90);
+        });
+
+        atomic<bool> uiRunning{ true };
+        view = view | CatchEvent([&](Event e) {
+            if (e == Event::Escape) { uiRunning.store(false); screen.ExitLoopClosure()(); return true; }
+            if (e == Event::Custom) { return true; }
+            return false;
+        });
+
+        thread ticker([&]() {
+            while (uiRunning.load()) {
+                this_thread::sleep_for(chrono::milliseconds(100));
+                if (!uiRunning.load()) break;
+                globalTick100ms();
+                try { screen.PostEvent(Event::Custom); } catch (...) { break; }
+            }
+        });
+
+        screen.Loop(view);
+        uiRunning.store(false);
+        if (ticker.joinable()) ticker.join();
+
+        cursorInfo.bVisible = true;
+        SetConsoleCursorInfo(hConsole, &cursorInfo);
+        message = "& Crusher panel closed.";
+        cls();
+    }
+
+    // ===== openWasherUI：单槽洗矿槽面板 =====
+    void openWasherUI(int wx, int wy) {
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        CONSOLE_CURSOR_INFO cursorInfo;
+        GetConsoleCursorInfo(hConsole, &cursorInfo);
+        cursorInfo.bVisible = false;
+        SetConsoleCursorInfo(hConsole, &cursorInfo);
+
+        auto screen = ScreenInteractive::Fullscreen();
+        auto it = washers.find({ wx, wy });
+        if (it == washers.end()) {
+            washers.insert({ {wx, wy}, OreWasher() });
+            it = washers.find({ wx, wy });
+        }
+        OreWasher& wsRef = it->second;
+
+        string statusMsg = "Washer at (" + to_string(wx) + "," + to_string(wy) + ").";
+        int selRec = wsRef.getSelectedRecipe();
+        vector<string> recipeLabels = wsRef.getRecipeList();
+
+        Component recipeList = Radiobox(&recipeLabels, &selRec);
+        Component buttonLoad = Button("LOAD CRUSHED", [&] {
+            wsRef.setSelectedRecipe(selRec);
+            if (wsRef.loadMaterials(player)) statusMsg = "Loaded. Washing...";
+            else statusMsg = "Cannot load (busy or no crushed ore).";
+        });
+        Component buttonCollect = Button("COLLECT", [&] {
+            if (wsRef.collect(player)) {
+                statusMsg = "Collected purified ore.";
+                if (!wsRef.getLastRareByproduct().empty()) {
+                    statusMsg += " Rare: " + wsRef.getLastRareByproduct() + " x" + to_string(wsRef.getLastRareAmount());
+                }
+            } else statusMsg = "Nothing to collect.";
+        });
+        Component buttonClose = Button("CLOSE", [&] { screen.ExitLoopClosure()(); });
+
+        auto buttons = Container::Vertical({ buttonLoad, buttonCollect, buttonClose });
+        auto layout = Container::Vertical({ recipeList, buttons });
+
+        Component view = Renderer(layout, [&] {
+            wsRef.setSelectedRecipe(selRec);
+            int pct = wsRef.getProgress();
+            const int barW = 30;
+            int fill = (pct * barW) / 100;
+            string barFill(fill, '#'), barSpace(barW - fill, '-');
+            string stateStr = "IDLE";
+            Color barCol = Color::GrayDark;
+            if (wsRef.getAnimState() == OreWasher::Washing) {
+                stateStr = wsRef.getHasPowerThisTick() ? "WASHING" : "PAUSED (no power)";
+                barCol = wsRef.getHasPowerThisTick() ? Color::Cyan : Color::Red;
+            } else if (wsRef.getAnimState() == OreWasher::Done) {
+                stateStr = "DONE";
+                barCol = Color::Green;
+            }
+            // 简单 ASCII 动画（8 帧水流）
+            int f = wsRef.getFrameIndex() % 8;
+            vector<string> waterArt = {
+                "  ~~~~~~~~~~~~~~~~~  ",
+                "  ~  ~~~~~~~~~~  ~  ",
+                "  ~    ~~~~~~    ~  ",
+                "  ~      ~~      ~  ",
+                "  ~    ~~~~~~    ~  ",
+                "  ~  ~~~~~~~~~~  ~  ",
+                "  ~~~~~~~~~~~~~~~~~  ",
+                "    ORE  WASHER      "
+            };
+            Elements artElems;
+            for (int i = 0; i < 4; ++i) {
+                int idx = (f + i) % (int)waterArt.size();
+                artElems.push_back(text(waterArt[idx]) | color(Color::Cyan));
+            }
+
+            return vbox({
+                text("       # ORE WASHER [W] #  @(" + to_string(wx) + "," + to_string(wy) + ")") | bold | color(Color::Cyan),
+                separator(),
+                hbox({
+                    vbox({
+                        text(" RECIPES") | bold | color(Color::Cyan),
+                        separator(),
+                        recipeList->Render() | flex,
+                    }) | size(WIDTH, GREATER_THAN, 42) | flex,
+                    separator(),
+                    vbox({
+                        text(" STATUS") | bold | color(Color::Cyan),
+                        separator(),
+                        text("  State: " + stateStr) | color(barCol),
+                        text("  [" + barFill + barSpace + "] ") | color(barCol),
+                        text("  " + to_string(pct) + "%"),
+                        separator(),
+                        text("  EU Pool: " + to_string(globalEU) + " / 10000") | color(Color::Cyan),
+                        text("  Power: 2 EU/tick when washing") | color(Color::GrayDark),
+                        separator(),
+                        text(" ANIMATION") | bold | color(Color::Cyan),
+                        vbox(artElems) | border,
+                    }) | size(WIDTH, EQUAL, 36),
+                }),
+                separator(),
+                buttons->Render() | center,
+                separator(),
+                text(statusMsg) | color(Color::Green),
+            }) | border | size(WIDTH, GREATER_THAN, 86);
+        });
+
+        atomic<bool> uiRunning{ true };
+        view = view | CatchEvent([&](Event e) {
+            if (e == Event::Escape) { uiRunning.store(false); screen.ExitLoopClosure()(); return true; }
+            if (e == Event::Custom) { return true; }
+            return false;
+        });
+
+        thread ticker([&]() {
+            while (uiRunning.load()) {
+                this_thread::sleep_for(chrono::milliseconds(100));
+                if (!uiRunning.load()) break;
+                globalTick100ms();
+                try { screen.PostEvent(Event::Custom); } catch (...) { break; }
+            }
+        });
+
+        screen.Loop(view);
+        uiRunning.store(false);
+        if (ticker.joinable()) ticker.join();
+
+        cursorInfo.bVisible = true;
+        SetConsoleCursorInfo(hConsole, &cursorInfo);
+        message = "& Washer panel closed.";
+        cls();
+    }
+
+    // ===== openCentrifugeUI：单槽离心机面板 =====
+    void openCentrifugeUI(int rx, int ry) {
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        CONSOLE_CURSOR_INFO cursorInfo;
+        GetConsoleCursorInfo(hConsole, &cursorInfo);
+        cursorInfo.bVisible = false;
+        SetConsoleCursorInfo(hConsole, &cursorInfo);
+
+        auto screen = ScreenInteractive::Fullscreen();
+        auto it = centrifuges.find({ rx, ry });
+        if (it == centrifuges.end()) {
+            centrifuges.insert({ {rx, ry}, Centrifuge() });
+            it = centrifuges.find({ rx, ry });
+        }
+        Centrifuge& cfRef = it->second;
+
+        string statusMsg = "Centrifuge at (" + to_string(rx) + "," + to_string(ry) + ").";
+        int selRec = cfRef.getSelectedRecipe();
+        vector<string> recipeLabels = cfRef.getRecipeList();
+
+        Component recipeList = Radiobox(&recipeLabels, &selRec);
+        Component buttonLoad = Button("LOAD PURIFIED", [&] {
+            cfRef.setSelectedRecipe(selRec);
+            if (cfRef.loadMaterials(player)) statusMsg = "Loaded. Spinning...";
+            else statusMsg = "Cannot load (busy or no purified ore).";
+        });
+        Component buttonCollect = Button("COLLECT", [&] {
+            if (cfRef.collect(player)) {
+                statusMsg = "Collected dust.";
+                if (!cfRef.getLastRareByproduct().empty()) {
+                    statusMsg += " Rare: " + cfRef.getLastRareByproduct() + " x" + to_string(cfRef.getLastRareAmount());
+                }
+            } else statusMsg = "Nothing to collect.";
+        });
+        Component buttonClose = Button("CLOSE", [&] { screen.ExitLoopClosure()(); });
+
+        auto buttons = Container::Vertical({ buttonLoad, buttonCollect, buttonClose });
+        auto layout = Container::Vertical({ recipeList, buttons });
+
+        Component view = Renderer(layout, [&] {
+            cfRef.setSelectedRecipe(selRec);
+            int pct = cfRef.getProgress();
+            const int barW = 30;
+            int fill = (pct * barW) / 100;
+            string barFill(fill, '#'), barSpace(barW - fill, '-');
+            string stateStr = "IDLE";
+            Color barCol = Color::GrayDark;
+            if (cfRef.getAnimState() == Centrifuge::Spinning) {
+                stateStr = cfRef.getHasPowerThisTick() ? "SPINNING" : "PAUSED (no power)";
+                barCol = cfRef.getHasPowerThisTick() ? Color::Magenta : Color::Red;
+            } else if (cfRef.getAnimState() == Centrifuge::Done) {
+                stateStr = "DONE";
+                barCol = Color::Green;
+            }
+            // 旋转动画（10 帧）
+            int f = cfRef.getFrameIndex() % 10;
+            vector<string> spinArt = {
+                "        .---.        ",
+                "       |  |  |       ",
+                "      |   |   |      ",
+                "     |    |    |     ",
+                "    |     |     |    ",
+                "     |    |    |     ",
+                "      |   |   |      ",
+                "       |  |  |       ",
+                "        '---'        ",
+                "     CENTRIFUGE      "
+            };
+            Elements artElems;
+            for (int i = 0; i < 5; ++i) {
+                int idx = (f + i) % (int)spinArt.size();
+                artElems.push_back(text(spinArt[idx]) | color(Color::MagentaLight));
+            }
+
+            return vbox({
+                text("       # CENTRIFUGE [R] #  @(" + to_string(rx) + "," + to_string(ry) + ")") | bold | color(Color::MagentaLight),
+                separator(),
+                hbox({
+                    vbox({
+                        text(" RECIPES") | bold | color(Color::Cyan),
+                        separator(),
+                        recipeList->Render() | flex,
+                    }) | size(WIDTH, GREATER_THAN, 42) | flex,
+                    separator(),
+                    vbox({
+                        text(" STATUS") | bold | color(Color::Cyan),
+                        separator(),
+                        text("  State: " + stateStr) | color(barCol),
+                        text("  [" + barFill + barSpace + "] ") | color(barCol),
+                        text("  " + to_string(pct) + "%"),
+                        separator(),
+                        text("  EU Pool: " + to_string(globalEU) + " / 10000") | color(Color::Cyan),
+                        text("  Power: 8 EU/tick when spinning") | color(Color::GrayDark),
+                        separator(),
+                        text(" ANIMATION") | bold | color(Color::Cyan),
+                        vbox(artElems) | border,
+                    }) | size(WIDTH, EQUAL, 36),
+                }),
+                separator(),
+                buttons->Render() | center,
+                separator(),
+                text(statusMsg) | color(Color::Green),
+            }) | border | size(WIDTH, GREATER_THAN, 86);
+        });
+
+        atomic<bool> uiRunning{ true };
+        view = view | CatchEvent([&](Event e) {
+            if (e == Event::Escape) { uiRunning.store(false); screen.ExitLoopClosure()(); return true; }
+            if (e == Event::Custom) { return true; }
+            return false;
+        });
+
+        thread ticker([&]() {
+            while (uiRunning.load()) {
+                this_thread::sleep_for(chrono::milliseconds(100));
+                if (!uiRunning.load()) break;
+                globalTick100ms();
+                try { screen.PostEvent(Event::Custom); } catch (...) { break; }
+            }
+        });
+
+        screen.Loop(view);
+        uiRunning.store(false);
+        if (ticker.joinable()) ticker.join();
+
+        cursorInfo.bVisible = true;
+        SetConsoleCursorInfo(hConsole, &cursorInfo);
+        message = "& Centrifuge panel closed.";
+        cls();
+    }
+
     void run() {
         introAnimation();
         int selectedSlot = selectSaveSlot();
@@ -3073,7 +4198,7 @@ public:
             showMessage();
 
             setcolor(COLOR_GREY);
-            cout << "\n  [WASD Move] [E Interact] [C Craft] [T Trade] [F Hint] [H Help] [P Save] [L Load] [Q Quit]\n";
+            cout << "\n  [WASD Move] [E Interact] [C Backpack] [T Trade] [B Build] [F Hint] [H Help] [P Save] [L Load] [Q Quit]\n";
             setcolor(COLOR_RESET);
 
             int key = _getch();
