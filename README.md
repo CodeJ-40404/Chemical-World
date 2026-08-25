@@ -3,7 +3,7 @@
 [![C++](https://img.shields.io/badge/C++-20-blue.svg)](https://isocpp.org/)
 [![FTXUI](https://img.shields.io/badge/FTXUI-6.1.9-green.svg)](https://github.com/ArthurSonzogni/FTXUI)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
-[![Save Format](https://img.shields.io/badge/save-v3-orange.svg)](#存档系统)
+[![Save Format](https://img.shields.io/badge/save-v4-green.svg)](#存档系统)
 
 一个基于 C++20 和 FTXUI 构建的终端交互式工业沙盒游戏，灵感来自 [GT:New Horizons](https://www.curseforge.com/minecraft/modpacks/gt-new-horizons) 的简化电力网络与机器链。挖掘矿石 → 土高炉冶炼 → 车床加工钢零件 → 卖钱 / 装配更多机器，搭建自己的工业帝国。
 
@@ -150,7 +150,7 @@ Chemical-World/
 - [ ] **单元测试**：使用 Google Test 覆盖核心逻辑
 
 ### 长期愿景
-成为一个庞大且融合工业-化学-宇航的硬核游戏，再基础框架完工后，保证没有魔法合成。
+成为一个庞大且融合工业-化学-宇航的硬核游戏，在基础框架与游戏逻辑完工后，**我们尽可能保证没有魔法合成**。
 
 ---
 
@@ -165,15 +165,15 @@ Chemical-World/
 **README 不包含详细玩法教程。** 如需了解具体内容，请查阅：
 
 - **游戏内帮助**：按 `H` 键查看按键列表
-- **项目 Wiki**：[Chemical-World Wiki](wiki/)（本仓库 `wiki/` 目录下）
-  - [Home](wiki/Home.md) — Wiki 首页与索引
-  - [Gameplay-Basics](wiki/Gameplay-Basics.md) — 玩法基础
-  - [Power-System](wiki/Power-System.md) — 电力系统详解
-  - [Machines](wiki/Machines.md) — 机器（高炉 / 车床 / 发电机）
-  - [Trading-Market](wiki/Trading-Market.md) — 交易市场
-  - [Build-Mode](wiki/Build-Mode.md) — 建造模式
-  - [Save-System](wiki/Save-System.md) — 存档系统
-  - [Controls](wiki/Controls.md) — 按键完整列表
+- **项目 Wiki**：[Chemical-World Wiki](https://github.com/CodeJ-40404/Chemical-World/wiki)（本仓库 `wiki/` 目录下）
+  - [Home](https://github.com/CodeJ-40404/Chemical-World/wiki) — Wiki 首页与索引
+  - [Gameplay-Basics](https://github.com/CodeJ-40404/Chemical-World/wiki/Gameplay-Basics) — 玩法基础
+  - [Power-System](https://github.com/CodeJ-40404/Chemical-World/wiki/Power-System) — 电力系统详解
+  - [Machines](https://github.com/CodeJ-40404/Chemical-World/wiki/Machines) — 机器（高炉 / 车床 / 发电机）
+  - [Trading-Market](https://github.com/CodeJ-40404/Chemical-World/wiki/Trading-Market) — 交易市场
+  - [Build-Mode](https://github.com/CodeJ-40404/Chemical-World/wiki/Build-Mode) — 建造模式
+  - [Save-System](https://github.com/CodeJ-40404/Chemical-World/wiki/Save-System) — 存档系统
+  - [Controls](https://github.com/CodeJ-40404/Chemical-World/wiki/Controls) — 按键完整列表
 
 ---
 
