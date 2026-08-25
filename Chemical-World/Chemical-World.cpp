@@ -125,27 +125,70 @@ int itemPrice(const string& name) {
     return it != prices.end() ? it->second : 0;
 }
 
-// ======================== 高炉系统 ========================
-class PowerNetwork;  // 前向声明：BlastFurnace/Lathe 引用 PowerNetwork*
-class BlastFurnace {
-private:
-    bool isRunning = false;
-    int progress = 0;
-    int maxProgress = 100;
-    int temperature = 20;
-    int targetTemperature = 1400;
-    int temperatureTolerance = 75;
-    int heatTime = 0;
-    int requiredHeatTime = 5000;
-    bool loaded = false;
-    string currentRecipe = "";
-    int fuelCount = 0;
-    int oreCount = 0;
-    int resultCount = 0;
-    vector<string> logs;
-    PowerNetwork* powerNet = nullptr;   // 电力网络（null=引导期免费）
-    int gx = 0, gy = 0;                  // 本机器在地图上的坐标
+class ChemicalWorldGame;   // 前向声明，供 LatheUI / TradeUI 引用
 
+// 机器元信息：存档里序列化每台机器的左上坐标/类型/燃烧状态
+struct MachineMeta {
+    int x, y;
+    char type;  // 'F' / 'L' / 'G'
+    int remainingBurnEU = 0;
+    int loadedCoal = 0;
+    bool active = false;
+};
+
+// 火力发电机
+class PowerGenerator {
+public:
+    int burnEU = 0;
+    int loadedCoal = 0;
+    int frameIndex = 0;
+    bool active = false;
+
+    bool feedCoal(PlayerData& p) {
+        if (!p.hasItem("coal", 1)) return false;
+        p.removeItem("coal", 1);
+        burnEU += 6400;
+        loadedCoal += 1;
+        active = true;
+        return true;
+    }
+
+    // 返回 <注入EU, 是否仍在燃烧>
+    pair<int, bool> updateTick() {
+        if (burnEU <= 0) {
+            active = false;
+            return { 0, false };
+        }
+        int inject = min(8, burnEU);
+        burnEU -= inject;
+        frameIndex++;
+        active = true;
+        if (burnEU <= 0) {
+            return { inject, false };
+        }
+        return { inject, true };
+    }
+
+    int getBurnEU() const { return burnEU; }
+    bool isActive() const { return active; }
+};
+
+// ======================== 高炉系统 ========================
+// 土高炉：4 槽并行，不耗电，不需要温度/吹空气。每槽 30s（300 × 100ms ticks）。
+// 动画 24 帧：0-5 STOKING(投煤+鼓风), 6-17 HEATING(火焰), 18-23 POURING(出铁)
+class BlastFurnace {
+public:
+    enum SlotPhase { IDLE, STOKING, HEATING, POURING, DONE };
+    struct Slot {
+        SlotPhase phase = IDLE;
+        int       recipeIndex = -1;
+        int       progressMs = 0;
+        int       totalMs = 30000;
+        int       loadedRecipe = -1;
+        int       oreCount = 0;
+        int       fuelCount = 0;
+        int       resultCount = 0;
+    };
     struct Recipe {
         string name;
         string oreName;
@@ -153,200 +196,217 @@ private:
         int oreRequired;
         int fuelRequired;
         int resultAmount;
-        int duration; // 秒
+        int durationMs;
     };
+
+private:
+    vector<string> logs;
+    vector<Slot> slots;
+    int focusedSlot = 0;
+    int selectedRecipe = 0;
 
     vector<Recipe> recipes = {
-        {"Steel Making", "hematite", "steel", 2, 1, 1, 5},
-        {"Steel Making", "magnetite", "steel", 2, 1, 1, 5},
-        {"Aluminum Smelting", "bauxite", "aluminum", 2, 1, 1, 5},
-        {"Tin Smelting", "cassiterite", "tin", 2, 1, 1, 5},
-        {"Copper Smelting", "malachite", "copper", 2, 1, 1, 5},
-        {"Copper Smelting", "chalcopyrite", "copper", 2, 1, 1, 5},
-        {"Gold Smelting", "gold_ore", "gold_ingot", 2, 1, 1, 5},
-        {"Silver Smelting", "silver_ore", "silver_ingot", 2, 1, 1, 5}
+        {"Steel Making",  "hematite",    "steel",       2, 1, 1, 30000},
+        {"Steel Making",  "magnetite",   "steel",       2, 1, 1, 30000},
+        {"Aluminum Smelt","bauxite",     "aluminum",    2, 1, 1, 30000},
+        {"Tin Smelting",  "cassiterite", "tin",         2, 1, 1, 30000},
+        {"Copper Smelt",  "malachite",   "copper",      2, 1, 1, 30000},
+        {"Copper Smelt",  "chalcopyrite","copper",      2, 1, 1, 30000},
+        {"Gold Smelting", "gold_ore",    "gold_ingot",  2, 1, 1, 30000},
+        {"Silver Smelt",  "silver_ore",  "silver_ingot",2, 1, 1, 30000}
     };
 
-    int selectedRecipe = 0;
-    int loadedRecipe = 0;
+    int computeFrame(Slot& s) const {
+        if (s.phase == IDLE) return 0;
+        if (s.phase == DONE) return 23;
+        int pct100 = s.totalMs == 0 ? 0 : (s.progressMs * 100) / s.totalMs;
+        if (pct100 < 33) {
+            return min(5, (pct100 * 6) / 33);
+        } else if (pct100 < 83) {
+            int seg = ((pct100 - 33) * 12) / 50;
+            if (seg < 0) seg = 0; if (seg > 11) seg = 11;
+            return 6 + seg;
+        } else {
+            int seg = ((pct100 - 83) * 6) / 17;
+            if (seg < 0) seg = 0; if (seg > 5) seg = 5;
+            return 18 + seg;
+        }
+    }
+
+    void checkLevelUpInternal(PlayerData& player) {
+        int needed = 100 + player.level * 20;
+        while (player.exp >= needed) {
+            player.exp -= needed;
+            player.level++;
+            logs.push_back("[F] Level Up! Current level: " + to_string(player.level));
+            needed = 100 + player.level * 20;
+        }
+    }
 
 public:
-    BlastFurnace() {}
+    BlastFurnace() : slots(4) {}
+
+    int getSlotCount() const { return 4; }
+    int getFocusedSlot() const { return focusedSlot; }
+    void setFocusedSlot(int i) { if (i >= 0 && i < 4) focusedSlot = i; }
+    Slot& getSlot(int i) { return slots[i]; }
+    int getFrameForSlot(int i) {
+        if (i < 0 || i >= 4) return 0;
+        return computeFrame(slots[i]);
+    }
 
     void addLog(const string& msg) {
-        logs.push_back(msg);
-        if (logs.size() > 20) logs.erase(logs.begin());
+        logs.push_back("[F" + to_string(focusedSlot) + "] " + msg);
+        if (logs.size() > 30) logs.erase(logs.begin());
     }
 
+    // ==== focused-slot 旧 API 兼容 ====
     string getStatus() {
-        if (isRunning) {
-            if (!loaded) return "ready to load";
-            if (temperature > targetTemperature + temperatureTolerance) return "OVERHEATED";
-            if (temperature >= targetTemperature - temperatureTolerance) return "holding temperature";
-            return "heating - use blower";
+        Slot& s = slots[focusedSlot];
+        switch (s.phase) {
+        case IDLE:    return "IDLE";
+        case STOKING: return "STOKING";
+        case HEATING: return "HEATING";
+        case POURING: return "POURING";
+        case DONE:    return "DONE (collect)";
         }
-        return "free";
+        return "IDLE";
     }
-
-    int getProgress() { return progress; }
-    int getMaxProgress() { return maxProgress; }
-    bool isActive() { return isRunning; }
-    int getTemperature() { return temperature; }
-    int getTargetTemperature() { return targetTemperature; }
-    int getTemperatureTolerance() { return temperatureTolerance; }
-    int getHeatTime() { return heatTime; }
-    int getRequiredHeatTime() { return requiredHeatTime; }
-    bool isLoaded() { return loaded; }
-
-    void selectRecipe(int index) {
-        if (!isRunning && index >= 0 && index < (int)recipes.size()) {
-            selectedRecipe = index;
-        }
+    int getProgress() {
+        Slot& s = slots[focusedSlot];
+        return s.totalMs == 0 ? 0 : (s.progressMs * 100) / s.totalMs;
     }
+    int getMaxProgress() { return 100; }
+    bool isActive() { Slot& s = slots[focusedSlot]; return s.phase != IDLE && s.phase != DONE; }
+    bool isLoaded() { Slot& s = slots[focusedSlot]; return s.phase != IDLE; }
+    int getTemperature() { return 1400; }
+    int getTargetTemperature() { return 1400; }
+    int getTemperatureTolerance() { return 75; }
+    int getHeatTime() { return slots[focusedSlot].progressMs; }
+    int getRequiredHeatTime() { return 30000; }
 
-    string getRecipeName() {
-        return recipes[selectedRecipe].name;
+    void selectRecipe(int idx) {
+        if (idx >= 0 && idx < (int)recipes.size()) selectedRecipe = idx;
     }
-
+    int getSelectedRecipe() const { return selectedRecipe; }
+    string getRecipeName() { return recipes[selectedRecipe].name; }
     string getRecipeInfo() {
         Recipe& r = recipes[selectedRecipe];
         return r.name + " (" + r.oreName + "): " + to_string(r.oreRequired) + " ore + " +
-            to_string(r.fuelRequired) + " fuel -> " + r.result + " x" + to_string(r.resultAmount);
+            to_string(r.fuelRequired) + " coal -> " + r.result + " x" +
+            to_string(r.resultAmount) + "  [30s]";
     }
+    vector<string> getRecipeList() {
+        vector<string> res;
+        for (auto& r : recipes)
+            res.push_back(r.name + " [" + r.oreName + "] -> " + r.result +
+                " x" + to_string(r.resultAmount) + " (30s)");
+        return res;
+    }
+    int recipeCount() const { return (int)recipes.size(); }
+    Recipe& getRecipe(int i) { return recipes[i]; }
 
-    bool canLoad(PlayerData& player);
-
-    void setPowerNet(PowerNetwork* net, int x, int y) { powerNet = net; gx = x; gy = y; }
-
-    // 仅查电力（UI 提示用，区分 "No power" vs "缺料"）
-    bool canLoadPower();
-
-    int findRecipe(const string& oreName, int oreAmount, int fuelAmount) {
+    bool canLoad(PlayerData& player) {
+        Slot& s = slots[focusedSlot];
+        if (s.phase != IDLE && s.phase != DONE) return false;
+        Recipe& r = recipes[selectedRecipe];
+        return player.hasItem(r.oreName, r.oreRequired) &&
+               player.hasItem("coal", r.fuelRequired);
+    }
+    int findRecipe(const string& oreName, int oreAmt, int fuelAmt) {
         for (int i = 0; i < (int)recipes.size(); ++i) {
             Recipe& r = recipes[i];
-            if (r.oreName == oreName && r.oreRequired == oreAmount &&
-                r.fuelRequired == fuelAmount) return i;
+            if (r.oreName == oreName && r.oreRequired == oreAmt && r.fuelRequired == fuelAmt) return i;
         }
         return -1;
     }
-
-    bool canLoad(PlayerData& player, const string& oreName, int oreAmount, int fuelAmount) {
-        return !isRunning && findRecipe(oreName, oreAmount, fuelAmount) >= 0 &&
-            player.hasItem(oreName, oreAmount) && player.hasItem("coal", fuelAmount);
+    bool canLoad(PlayerData& player, const string& oreName, int oreAmt, int fuelAmt) {
+        int idx = findRecipe(oreName, oreAmt, fuelAmt);
+        Slot& s = slots[focusedSlot];
+        return (s.phase == IDLE || s.phase == DONE) && idx >= 0 &&
+               player.hasItem(oreName, oreAmt) && player.hasItem("coal", fuelAmt);
     }
 
     void loadMaterials(PlayerData& player) {
-        if (isRunning) return;
+        Slot& s = slots[focusedSlot];
+        if (s.phase != IDLE && s.phase != DONE) {
+            addLog("X Slot is still in progress.");
+            return;
+        }
         Recipe& r = recipes[selectedRecipe];
         if (!canLoad(player)) {
             addLog("X NOT ENOUGH MATERIALS");
             return;
         }
-
         player.removeItem(r.oreName, r.oreRequired);
         player.removeItem("coal", r.fuelRequired);
-
-        isRunning = true;
-        loaded = true;
-        progress = 0;
-        temperature = 200;
-        heatTime = 0;
-        currentRecipe = r.name;
-        loadedRecipe = selectedRecipe;
-        oreCount = r.oreRequired;
-        fuelCount = r.fuelRequired;
-        resultCount = r.resultAmount;
-
-        addLog("Loaded " + to_string(r.oreRequired) + " ore and " +
-            to_string(r.fuelRequired) + " coal. Start blowing air!");
+        s.phase = STOKING;
+        s.progressMs = 0;
+        s.totalMs = r.durationMs;
+        s.loadedRecipe = selectedRecipe;
+        s.oreCount = r.oreRequired;
+        s.fuelCount = r.fuelRequired;
+        s.resultCount = r.resultAmount;
+        s.recipeIndex = selectedRecipe;
+        addLog("Loaded " + to_string(r.oreRequired) + " " + r.oreName +
+               " + " + to_string(r.fuelRequired) + " coal. 30s burn begins.");
     }
-
-    bool loadMaterials(PlayerData& player, const string& oreName, int oreAmount, int fuelAmount) {
-        int recipeIndex = findRecipe(oreName, oreAmount, fuelAmount);
-        if (isRunning || recipeIndex < 0 || !player.hasItem(oreName, oreAmount) ||
-            !player.hasItem("coal", fuelAmount)) {
-            addLog("X Charge does not match any recipe or materials are missing.");
-            return false;
-        }
-        selectedRecipe = recipeIndex;
+    bool loadMaterials(PlayerData& player, const string& oreName, int oreAmt, int fuelAmt) {
+        int idx = findRecipe(oreName, oreAmt, fuelAmt);
+        if (idx < 0) return false;
+        selectedRecipe = idx;
         loadMaterials(player);
         return true;
     }
-
     bool canStart(PlayerData& player) { return canLoad(player); }
     void start(PlayerData& player) { loadMaterials(player); }
 
-    bool blowAir() {
-        if (!isRunning || !loaded) return false;
-        temperature = min(1800, temperature + 90);
-        return true;
-    }
+    bool blowAir() { return false; }  // 土高炉：移除吹空气
 
     bool update(PlayerData& player, int elapsedMs = 100) {
-        if (!isRunning || !loaded) return false;
-
-        temperature = max(20, temperature - 12);
-        if (temperature > targetTemperature + temperatureTolerance) {
-            isRunning = false;
-            loaded = false;
-            progress = 0;
-            temperature = 20;
-            addLog("X Furnace overheated! The batch was lost.");
-            return false;
-        }
-
-        if (temperature >= targetTemperature - temperatureTolerance &&
-            temperature <= targetTemperature + temperatureTolerance) {
-            heatTime += elapsedMs;
-            progress = min(maxProgress, heatTime * maxProgress / requiredHeatTime);
-        }
-
-        if (heatTime >= requiredHeatTime) {
-            isRunning = false;
-            loaded = false;
-            progress = 100;
-            temperature = 20;
-
-            Recipe& r = recipes[loadedRecipe];
-            player.addItem(r.result, resultCount, "product", 20);
-            player.exp += 15;
-            addLog("OK! " + r.name + " completed! You got " + r.result + " x" + to_string(resultCount));
-
-            // 检查升级
-            int needed = 100 + player.level * 20;
-            while (player.exp >= needed) {
-                player.exp -= needed;
-                player.level++;
-                addLog("Level Up! Current level: " + to_string(player.level));
-                needed = 100 + player.level * 20;
+        bool anyFinished = false;
+        for (int i = 0; i < 4; ++i) {
+            Slot& s = slots[i];
+            if (s.phase == IDLE || s.phase == DONE) continue;
+            s.progressMs += elapsedMs;
+            int pct100 = s.totalMs == 0 ? 0 : (s.progressMs * 100) / s.totalMs;
+            if (pct100 < 33) s.phase = STOKING;
+            else if (pct100 < 83) s.phase = HEATING;
+            else if (s.progressMs < s.totalMs) s.phase = POURING;
+            else {
+                if (s.loadedRecipe >= 0 && s.loadedRecipe < (int)recipes.size()) {
+                    Recipe& r = recipes[s.loadedRecipe];
+                    player.addItem(r.result, s.resultCount, "product", 20);
+                    player.exp += 25;
+                    logs.push_back("[F" + to_string(i) + "] OK! " + r.name +
+                                   " -> " + r.result + " x" + to_string(s.resultCount));
+                    checkLevelUpInternal(player);
+                }
+                s.phase = DONE;
+                s.progressMs = s.totalMs;
+                anyFinished = true;
             }
-
-            return true;
         }
-        return false;
+        return anyFinished;
     }
 
     void cancel() {
-        if (isRunning) {
-            isRunning = false;
-            loaded = false;
-            progress = 0;
-            temperature = 20;
-            addLog("Smelting cancelled");
+        Slot& s = slots[focusedSlot];
+        if (s.phase != IDLE) {
+            s.phase = IDLE;
+            s.progressMs = 0;
+            s.loadedRecipe = -1;
+            s.oreCount = 0; s.fuelCount = 0; s.resultCount = 0;
+            addLog("Smelting in slot cancelled (materials lost).");
         }
+    }
+
+    void collectDone() {
+        Slot& s = slots[focusedSlot];
+        if (s.phase == DONE) { s.phase = IDLE; s.progressMs = 0; }
     }
 
     vector<string> getLogs() { return logs; }
-
-    vector<string> getRecipeList() {
-        vector<string> result;
-        for (auto& r : recipes) {
-            result.push_back(r.name + " [" + r.oreName + "] -> " + r.result + " x" + to_string(r.resultAmount));
-        }
-        return result;
-    }
-
-    int getSelectedRecipe() { return selectedRecipe; }
 };
 
 // ======================== 车床系统 ========================
@@ -370,8 +430,6 @@ private:
     vector<string> logs;
     vector<vector<string>> insertFrames;     // 5 帧滑入动画
     vector<vector<string>> machiningFrames;  // 4 帧加工循环
-    PowerNetwork* powerNet = nullptr;   // 电力网络（null=引导期免费）
-    int gx = 0, gy = 0;                  // 本机器在地图上的坐标
 
     struct Mold {
         string name;            // "Gear" — Radiobox 显示
@@ -443,16 +501,14 @@ public:
     bool isLoaded() { return loaded; }
     int  getSelectedMold() { return selectedMold; }
     AnimState getAnimState() { return animState; }
+    bool getRunning() const { return isRunning; }
+    // 每 tick 由 ChemicalWorldGame 先扣 EU 设置此字段，然后 update() 决定是否加工
+    bool hasPowerThisTick = true;
 
     void selectMold(int index) {
         if (animState != Idle) return;
         if (index >= 0 && index < (int)molds.size()) selectedMold = index;
     }
-
-    void setPowerNet(PowerNetwork* net, int x, int y) { powerNet = net; gx = x; gy = y; }
-
-    // 仅查电力（UI 提示用，区分 "No power" vs "缺料"）
-    bool canLoadPower();
 
     // 循环切换到下一个模具（SELECT 按钮用）
     void selectNextMold() {
@@ -460,7 +516,10 @@ public:
         selectedMold = (selectedMold + 1) % (int)molds.size();
     }
 
-    bool canLoad(PlayerData& player);
+    bool canLoad(PlayerData& player) {
+        if (animState != Idle) return false;
+        return player.hasItem("steel", molds[selectedMold].steelRequired);
+    }
 
     void loadMaterials(PlayerData& player) {
         if (animState != Idle) return;
@@ -490,7 +549,21 @@ public:
             }
             return false;
         }
+        if (animState == Machining || animState == Inserting) {
+            // 电力检测：世界先扣 EU 并设置 hasPowerThisTick；false 就暂停
+            if (!hasPowerThisTick) {
+                if (isRunning) {
+                    isRunning = false;
+                    addLog("X No power (need 2 EU/tick). Machining paused.");
+                }
+                return false;
+            }
+        }
         if (animState == Machining) {
+            if (!isRunning) {
+                isRunning = true;
+                addLog("⚡ Power restored. Machining resumed.");
+            }
             frameIndex++;
             accumulatedMs += elapsedMs;
             progress = min(maxProgress, accumulatedMs * maxProgress / molds[loadedMold].durationMs);
@@ -589,8 +662,6 @@ struct Tile {
     string mineral;
     int richness = 0;
     int hits = 0;
-    char pipe = 0;   // 0=无管道, 'p'=有管道（可走过）
-    char wire = 0;   // 0=无电线, 'w'=有电线（可走过）
 };
 
 enum class Area { Home, Wasteland, Cave };
@@ -642,23 +713,93 @@ public:
             fill(60, 50, { '.', "Grass", "Home grass", true, COLOR_GREEN });
             for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x)
                 if (rand() % 14 == 0) tiles[y][x] = { 't', "Tree", "Decoration", false, COLOR_DARK_GREEN };
+            // BlastFurnace 2×2（左上 (5,5)；大写主格红，辅格暗红，都不可踩）
             tiles[5][5] = { 'F', "Blast Furnace", "Installed machine", false, COLOR_RED };
+            tiles[5][6] = { 'f', "Blast Furnace", "Installed machine", false, COLOR_DARK_RED };
+            tiles[6][5] = { 'f', "Blast Furnace", "Installed machine", false, COLOR_DARK_RED };
+            tiles[6][6] = { 'f', "Blast Furnace", "Installed machine", false, COLOR_DARK_RED };
             tiles[5][12] = { 'C', "Car", "Travel to the wasteland", true, COLOR_YELLOW };
-            tiles[5][6] = { '.', "Grass", "Home grass", true, COLOR_GREEN };
-            // 车床放在 (x=5, y=8)，与高炉(5,5)/汽车(12,5) 无相邻格重叠，E 键无歧义
+            // Lathe 2×2（左上 (8,5)；紫/暗紫，都不可踩）
             tiles[8][5] = { 'L', "Lathe", "Machining facility", false, COLOR_PURPLE };
-            tiles[6][5] = { '.', "Grass", "Home grass", true, COLOR_GREEN };
-            tiles[7][5] = { '.', "Grass", "Home grass", true, COLOR_GREEN };
-            // 河流与湖泊：远离 F(5,5)/L(5,8)/car(12,5)/spawn(8,5)
-            // 湖泊在右下 (40-44, 30-34)
-            for (int y = 30; y <= 34; ++y)
-                for (int x = 40; x <= 44; ++x)
-                    tiles[y][x] = { '~', "Water", "River source", false, COLOR_BLUE };
-            // 河流：从湖蜿蜒向左上到地图边
-            int rx = 40, ry = 30;
-            while (rx > 2 && ry > 2) {
-                tiles[ry][rx] = { '~', "Water", "River", false, COLOR_BLUE };
-                if (rand() % 2) rx--; else ry--;
+            tiles[8][6] = { 'l', "Lathe", "Machining facility", false, COLOR_DARK_PURPLE };
+            tiles[9][5] = { 'l', "Lathe", "Machining facility", false, COLOR_DARK_PURPLE };
+            tiles[9][6] = { 'l', "Lathe", "Machining facility", false, COLOR_DARK_PURPLE };
+            // 玩家出生格 (10,5)，在车床右下方，确保不站在机器上
+            tiles[10][5] = { '.', "Grass", "Home grass", true, COLOR_GREEN };
+
+            // ===== 家园装饰 =====
+            // 1) 河流：尝试几条不同方向的起点，找 >=10 连续格
+            {
+                int bestLen = 0;
+                int bestX = 15, bestY = 38;
+                int bestDir = 0;
+                for (int attempt = 0; attempt < 5; ++attempt) {
+                    int sx = 8 + rand() % (width - 12);
+                    int sy = 28 + rand() % (height - 32);
+                    for (int dir = 0; dir < 3; ++dir) {
+                        int len = 0;
+                        for (int step = 0; step < 15; ++step) {
+                            int x = sx + (dir == 0 ? step : (dir == 1 ? 0 : step));
+                            int y = sy + (dir == 1 ? step : (dir == 2 ? step : 0));
+                            if (x < 0 || x >= width || y < 0 || y >= height) break;
+                            if (tiles[y][x].display != '.') break;
+                            len++;
+                        }
+                        if (len > bestLen) { bestLen = len; bestX = sx; bestY = sy; bestDir = dir; }
+                    }
+                }
+                for (int step = 0; step < max(10, bestLen); ++step) {
+                    int x = bestX + (bestDir == 0 ? step : (bestDir == 1 ? 0 : step));
+                    int y = bestY + (bestDir == 1 ? step : (bestDir == 2 ? step : 0));
+                    if (x >= 0 && x < width && y >= 0 && y < height && tiles[y][x].display == '.')
+                        tiles[y][x] = { '~', "River", "Flowing water", false, COLOR_BLUE };
+                }
+            }
+            // 2) 湖泊：3×5 固定尺寸，位置在右下角远离开机器/出生
+            {
+                int tries = 0;
+                while (tries++ < 50) {
+                    int cx = 40 + rand() % 10;
+                    int cy = 32 + rand() % 8;
+                    bool ok = true;
+                    for (int dy = -1; dy <= 1; ++dy) for (int dx = -2; dx <= 2; ++dx) {
+                        int x = cx + dx, y = cy + dy;
+                        if (x < 0 || x >= width || y < 0 || y >= height) ok = false;
+                        else if (tiles[y][x].display != '.') ok = false;
+                    }
+                    if (ok) {
+                        for (int dy = -1; dy <= 1; ++dy) for (int dx = -2; dx <= 2; ++dx) {
+                            tiles[cy + dy][cx + dx] = { '~', "Lake", "Calm water", false, COLOR_DARK_CYAN };
+                        }
+                        break;
+                    }
+                }
+            }
+            // 3) 花：随机 40 朵，3 种颜色
+            {
+                int placed = 0, tries = 0;
+                while (placed < 40 && tries++ < 2000) {
+                    int x = rand() % width;
+                    int y = rand() % height;
+                    if (tiles[y][x].display != '.') continue;
+                    int c = COLOR_PURPLE;
+                    int r = rand() % 3;
+                    if (r == 0) c = COLOR_YELLOW;
+                    else if (r == 1) c = COLOR_GREEN;
+                    tiles[y][x] = { '*', "Flower", "Wild flower", true, c };
+                    placed++;
+                }
+            }
+            // 4) 草丛：随机 30 丛
+            {
+                int placed = 0, tries = 0;
+                while (placed < 30 && tries++ < 1500) {
+                    int x = rand() % width;
+                    int y = rand() % height;
+                    if (tiles[y][x].display != '.') continue;
+                    tiles[y][x] = { 'v', "Grass tuft", "Tall grass", true, COLOR_DARK_GREEN };
+                    placed++;
+                }
             }
         }
         else if (area == Area::Wasteland) {
@@ -734,6 +875,10 @@ public:
 
     int getWidth() const { return width; }
     int getHeight() const { return height; }
+    char getTileDisplay(int x, int y) const {
+        if (x < 0 || x >= width || y < 0 || y >= height) return '#';
+        return tiles[y][x].display;
+    }
 
     void interact(PlayerData& player, int x, int y) {
         Tile& tile = getTile(x, y);
@@ -747,14 +892,12 @@ public:
             for (int x = 0; x < width; ++x) {
                 const Tile& tile = tiles[y][x];
                 output << tile.display << ' ' << (tile.mineral.empty() ? "-" : tile.mineral) << ' ' << tile.richness << ' '
-                    << tile.hits << ' ' << tile.color << ' '
-                    << (int)(unsigned char)tile.pipe << ' ' << (int)(unsigned char)tile.wire << ' '
-                    << (tile.passable ? 1 : 0) << '\n';
+                    << tile.hits << ' ' << tile.color << '\n';
             }
         }
     }
 
-    bool load(istream& input, int version) {
+    bool load(istream& input) {
         int width = 0;
         int height = 0;
         if (!(input >> width >> height) || width <= 0 || height <= 0) return false;
@@ -765,19 +908,11 @@ public:
                 string mineral;
                 if (!(input >> tile.display >> mineral >> tile.richness >> tile.hits >> tile.color)) return false;
                 tile.mineral = mineral == "-" ? "" : mineral;
-                if (version >= 3) {
-                    int pipeI = 0, wireI = 0, passableI = 0;
-                    if (!(input >> pipeI >> wireI >> passableI)) return false;
-                    tile.pipe = (char)pipeI;
-                    tile.wire = (char)wireI;
-                    tile.passable = passableI != 0;
-                }
-                else {
-                    tile.pipe = 0;
-                    tile.wire = 0;
-                    tile.passable = tile.display != '=' && tile.display != 't'
-                        && tile.display != 'F' && tile.display != 'L';
-                }
+                tile.passable = tile.display != '=' && tile.display != 't'
+                    && tile.display != 'F' && tile.display != 'L'
+                    && tile.display != 'f' && tile.display != 'l'
+                    && tile.display != 'G' && tile.display != 'g'
+                    && tile.display != '+';
                 tile.name = tile.mineral.empty() ? "Stone" : tile.mineral;
                 tile.description = tile.mineral.empty() ? "Empty ground" : "Mineral deposit";
             }
@@ -793,32 +928,22 @@ private:
     PlayerData& player;
     ScreenInteractive& screen;
     bool running = true;
-    string statusMessage = "WELCOME TO THE FURNACE!";
+    string statusMessage = "WELCOME! Earth blast furnace: 4-slot parallel x 30s each. No power needed.";
 
     Component mainContainer;
     Component recipeList;
+    Component slotTabs;
     Component buttonLoad;
-    Component buttonPut;
-    Component buttonPutDone;
-    Component buttonBlower;
-    Component buttonOreMinus;
-    Component buttonOrePlus;
-    Component buttonFuelMinus;
-    Component buttonFuelPlus;
     Component buttonCancel;
+    Component buttonCollect;
     Component buttonClose;
-    Component progressBar;
     Component logViewer;
+    Component progressRenderer;
 
-    // 保持配方列表的生命周期，使 Radiobox 引用有效
-    std::vector<std::string> recipeNames;
-    std::vector<std::string> inputNames;
-
-    int selectedInput = 0;
-    int oreQuantity = 2;
-    int fuelQuantity = 1;
-    bool needRefresh = false;
-    bool putting = false;
+    vector<string> recipeNames;
+    vector<string> slotTabLabels;
+    int focusedSlotLocal = 0;
+    int selRecLocal = 0;
 
 public:
     FurnaceUI(BlastFurnace& f, PlayerData& p, ScreenInteractive& s)
@@ -826,253 +951,244 @@ public:
         setupUI();
     }
 
+    // 返回 24 帧的单帧 ASCII 画面，11 行文本
+    vector<string> artFrame(int frame) {
+        if (frame < 0) frame = 0;
+        if (frame > 23) frame = 23;
+        string fire;
+        Color col = Color::YellowLight;
+        if (frame <= 5) {
+            // STOKING 0-5：工人铲煤入炉 + 零星火苗
+            const char* f0 = "        ";
+            const char* f1 = "    \\\\  /";
+            const char* f2 = "     >#<";
+            const char* f3 = "    /[\\\\";
+            switch (frame) {
+            case 0: fire = string(f0); break;
+            case 1: fire = "    \\\\   "; break;
+            case 2: fire = string(f1); break;
+            case 3: fire = string(f2); break;
+            case 4: fire = string(f3); break;
+            case 5: fire = "   \\\\#_/ "; break;
+            }
+        } else if (frame <= 17) {
+            // HEATING 6-17：火焰高度随 frame 增大，12 帧渐强
+            int level = frame - 6;      // 0..11
+            string base = "   ";
+            for (int i = 0; i < 3 + level / 2; ++i) base += "|^^| ";
+            if (level >= 6) base = "   \\/\\/\\/\\/\\/\\/";
+            fire = base.substr(0, 11);
+            col = Color::RedLight;
+        } else {
+            // POURING 18-23：液态金属流出
+            int stage = frame - 18; // 0..5
+            const char* arr[] = {
+                "     |==| ",
+                "     |==\\",
+                "     |==\\\\",
+                "      \\==\\\\",
+                "       \\==\\\\_",
+                "        \\===\\\\__"
+            };
+            fire = arr[stage];
+            col = Color::YellowLight;
+        }
+
+        vector<string> art = {
+            "  +-------------------+",
+            "  |  EARTH BLAST FURN.|",
+            "  |                   |",
+            "  |    (o)    (o)     |",
+            "  |    |______|       |",
+            "  |   /        \\      |",
+            string("  |  ") + fire + string(string::size_type(19 - 3 - fire.size()), ' ') + string("|"),
+            "  |   \\________/      |",
+            "  |                   |",
+            "  +-------------------+",
+            "   frame = " + to_string(frame) + " / 23"
+        };
+        return art;
+    }
+
     void setupUI() {
-        // 创建配方列表 - 使用 Radiobox
-        inputNames = { "hematite", "magnetite", "bauxite", "cassiterite",
-            "malachite", "chalcopyrite", "gold_ore", "silver_ore" };
-        recipeList = Radiobox(&inputNames, &selectedInput);
+        // 配方（Radiobox 使用 oreName 列表显示选择）
+        recipeNames.clear();
+        for (int i = 0; i < furnace.recipeCount(); ++i) {
+            auto& r = furnace.getRecipe(i);
+            recipeNames.push_back(r.oreName + " (" + to_string(r.oreRequired) + "+c" +
+                                   to_string(r.fuelRequired) + " -> " + r.result + ")");
+        }
+        int selRec = furnace.getSelectedRecipe();
+        if (selRec < 0) selRec = 0;
+        if (selRec >= (int)recipeNames.size()) selRec = 0;
+        selRecLocal = selRec;
+        recipeList = Menu(&recipeNames, &selRecLocal);
+        recipeList = Renderer(recipeList, [&] {
+            furnace.selectRecipe(selRecLocal);
+            return recipeList->Render();
+        });
 
-        // 绑定选择事件
-        recipeList |= CatchEvent([&](Event event) {
-            if (event == Event::ArrowUp || event == Event::ArrowDown) {
-                needRefresh = true;
-                return true;
+        // 4 个槽位 Tab
+        slotTabLabels = { " Slot 0 "," Slot 1 "," Slot 2 "," Slot 3 " };
+        focusedSlotLocal = furnace.getFocusedSlot();
+        slotTabs = Radiobox(&slotTabLabels, &focusedSlotLocal);
+        slotTabs = Renderer(slotTabs, [&] {
+            furnace.setFocusedSlot(focusedSlotLocal);
+            return slotTabs->Render();
+        });
+
+        buttonLoad = Button("LOAD SLOT", [&] {
+            furnace.setFocusedSlot(focusedSlotLocal);
+            if (furnace.canLoad(player)) {
+                furnace.loadMaterials(player);
+                statusMessage = "Slot " + to_string(focusedSlotLocal) + " loaded. 30s timer started.";
+            } else {
+                statusMessage = "Need recipe's ore + coal (check slot is idle).";
             }
-            return false;
-            });
-
-        buttonPut = Button("PUT", [&] {
-            putting = true;
-            needRefresh = true;
-            // 进入投料视图后把焦点交给 "RETURN TO FURNACE"，
-            // 这样直接按 Enter 即可返回主界面。
-            buttonPutDone->TakeFocus();
-            });
-        buttonPutDone = Button("RETURN TO FURNACE", [&] {
-            putting = false;
-            needRefresh = true;
-            // 返回主界面后把焦点交回 PUT，方便继续操作。
-            buttonPut->TakeFocus();
-            });
-
-        buttonLoad = Button("LOAD MATERIALS", [&] {
-            if (furnace.canLoad(player, inputNames[selectedInput], oreQuantity, fuelQuantity)) {
-                furnace.loadMaterials(player, inputNames[selectedInput], oreQuantity, fuelQuantity);
-                statusMessage = "Charge loaded. Keep the temperature in the green zone!";
-                needRefresh = true;
-            }
-            else {
-                if (!furnace.canLoadPower()) statusMessage = "No power! Connect a generator.";
-                else statusMessage = "Need the selected recipe's ore and coal.";
-                needRefresh = true;
-            }
-            });
-
-        buttonOreMinus = Button("ORE -", [&] { oreQuantity = max(1, oreQuantity - 1); });
-        buttonOrePlus = Button("ORE +", [&] { oreQuantity = min(8, oreQuantity + 1); });
-        buttonFuelMinus = Button("COAL -", [&] { fuelQuantity = max(1, fuelQuantity - 1); });
-        buttonFuelPlus = Button("COAL +", [&] { fuelQuantity = min(8, fuelQuantity + 1); });
-
-        buttonBlower = Button("BLOW AIR", [&] {
-            if (furnace.blowAir()) {
-                statusMessage = "Whoosh! Temperature increased.";
-            }
-            else {
-                statusMessage = "Load materials before using the blower.";
-            }
-            needRefresh = true;
-            });
-
-        // 取消按钮
-        buttonCancel = Button("CANCEL", [&] {
+        });
+        buttonCancel = Button("CANCEL SLOT", [&] {
+            furnace.setFocusedSlot(focusedSlotLocal);
             furnace.cancel();
-            statusMessage = "Cancelled";
-            needRefresh = true;
-            });
-
-        // 关闭按钮
+            statusMessage = "Slot " + to_string(focusedSlotLocal) + " cancelled.";
+        });
+        buttonCollect = Button("COLLECT SLOT", [&] {
+            furnace.setFocusedSlot(focusedSlotLocal);
+            auto& s = furnace.getSlot(focusedSlotLocal);
+            if (s.phase == BlastFurnace::DONE) {
+                furnace.collectDone();
+                statusMessage = "Slot " + to_string(focusedSlotLocal) + " cleared. Ready for new batch.";
+            } else {
+                statusMessage = "Slot is not DONE yet.";
+            }
+        });
         buttonClose = Button("CLOSE", [&] {
             running = false;
             screen.ExitLoopClosure()();
-            });
+        });
 
-        // 进度条组件
-        progressBar = Renderer([&] {
-            int prog = furnace.getProgress();
-            int maxProg = furnace.getMaxProgress();
-            int filled = (prog * 20) / maxProg;
-
-            string bar = "[";
-            for (int i = 0; i < 30; i++) {
-                if (i < (prog * 30) / maxProg) bar += "#";
-                else bar += ".";
+        progressRenderer = Renderer([&] {
+            furnace.setFocusedSlot(focusedSlotLocal);
+            Elements allBars;
+            for (int i = 0; i < 4; ++i) {
+                auto& s = furnace.getSlot(i);
+                string lbl = "[" + to_string(i) + "] ";
+                if (s.phase == BlastFurnace::IDLE) lbl += "IDLE          ";
+                else if (s.phase == BlastFurnace::DONE) lbl += "DONE          ";
+                else {
+                    int pct = s.totalMs == 0 ? 0 : (s.progressMs * 100) / s.totalMs;
+                    lbl += (s.phase == BlastFurnace::STOKING ? "STOKE " :
+                            s.phase == BlastFurnace::HEATING ? "HEAT  " : "POUR  ");
+                    lbl += to_string(pct) + "%";
+                }
+                string bar(30, '.');
+                if (s.phase != BlastFurnace::IDLE && s.phase != BlastFurnace::DONE) {
+                    int pct = s.totalMs == 0 ? 0 : (s.progressMs * 30) / s.totalMs;
+                    for (int k = 0; k < pct && k < 30; ++k) bar[k] = '#';
+                } else if (s.phase == BlastFurnace::DONE) {
+                    bar.assign(30, '*');
+                }
+                Color c = Color::GrayDark;
+                if (s.phase == BlastFurnace::STOKING) c = Color::YellowLight;
+                else if (s.phase == BlastFurnace::HEATING) c = Color::RedLight;
+                else if (s.phase == BlastFurnace::POURING) c = Color::MagentaLight;
+                else if (s.phase == BlastFurnace::DONE) c = Color::Green;
+                allBars.push_back(hbox({
+                    text(lbl) | size(WIDTH, EQUAL, 20),
+                    text(" [" + bar + "] ") | color(c),
+                }));
             }
-            bar += "]";
+            return vbox(std::move(allBars)) | border;
+        });
 
-            string statusText = furnace.isActive() ? "..." : "|| free";
-            string percent = to_string(prog) + "%";
-
-            return hbox({ text("  "), text(bar) | color(Color::Green),
-                text("  "), text(statusText) | bold, text("  "), text(percent) });
-            });
-
-        // 日志查看器
         logViewer = Renderer([&] {
             auto logs = furnace.getLogs();
             Elements elems;
-            for (auto& log : logs) {
-                elems.push_back(text(log));
-            }
-            if (elems.empty()) {
-                elems.push_back(text("(no logs)"));
-            }
+            for (auto& l : logs) elems.push_back(text(l));
+            if (elems.empty()) elems.push_back(text("(no logs)"));
             return vbox(elems) | border | size(HEIGHT, LESS_THAN, 8);
-            });
-
-        // 主布局
-        // 说明：buttonPutDone 之前只被 mainContainer 的渲染函数通过 ->Render() 手动绘制，
-        // 并未挂载到 layout 组件树中，因此它永远收不到键盘/鼠标事件 —— 表现为按下 PUT
-        // 进入投料视图后，"RETURN TO FURNACE" 按钮点不动、无法返回主界面。
-        // 修复：把 buttonPutDone 挂到组件树里，并用 Maybe 按视图切换按钮的可见/可聚焦状态，
-        // 避免在某一视图里 Tab 到不可见按钮（例如投料时误触不可见的 CLOSE）。
-        auto showMain = [this] { return !putting; };
-        auto showPut = [this] { return  putting; };
+        });
 
         auto layout = Container::Vertical({
-            Container::Horizontal({
-                recipeList,
-                Container::Vertical({
-                    Container::Horizontal({ buttonOreMinus, buttonOrePlus }),
-                    Container::Horizontal({ buttonFuelMinus, buttonFuelPlus }),
-                    Maybe(buttonLoad,    showMain),
-                    Maybe(buttonPut,     showMain),
-                    Maybe(buttonBlower,  showMain),
-                    Maybe(buttonCancel,  showMain),
-                    Maybe(buttonClose,   showMain),
-                    Maybe(buttonPutDone, showPut),
-                }),
-            }),
-            progressBar,
-            logViewer,
-            });
+            slotTabs, recipeList,
+            buttonLoad, buttonCancel, buttonCollect, buttonClose,
+        });
 
         mainContainer = Renderer(layout, [&] {
-            // 获取当前配方信息
-            string recipeName = inputNames[selectedInput];
-            string recipeInfo = "Charge: " + recipeName + " x" + to_string(oreQuantity) +
-                " + coal x" + to_string(fuelQuantity);
-            string status = furnace.getStatus();
+            furnace.setFocusedSlot(focusedSlotLocal);
+            int frame = furnace.getFrameForSlot(focusedSlotLocal);
+            vector<string> art = artFrame(frame);
+            Elements artLines;
+            for (auto& ln : art) artLines.push_back(text(ln) | color(Color::YellowLight));
+            auto artBox = vbox(std::move(artLines)) | borderDouble;
 
-            // 库存信息
-            int selectedOre = player.getItemCount(recipeName);
-            int coal = player.getItemCount("coal");
-            int steel = player.getItemCount("steel");
-            int temperature = furnace.getTemperature();
-            int target = furnace.getTargetTemperature();
-            int tolerance = furnace.getTemperatureTolerance();
-            string temperatureText = to_string(temperature) + " C   target " +
-                to_string(target - tolerance) + " - " + to_string(target + tolerance) + " C";
-            Color temperatureColor = temperature > target + tolerance ? Color::Red :
-                (temperature >= target - tolerance ? Color::Green : Color::Yellow);
-            string heatText = to_string(furnace.getHeatTime() / 1000) + " / " +
-                to_string(furnace.getRequiredHeatTime() / 1000) + " sec";
+            auto& r = furnace.getRecipe(furnace.getSelectedRecipe());
+            string recipeInfo = r.name + " (" + r.oreName + " x" + to_string(r.oreRequired) +
+                                " + coal x" + to_string(r.fuelRequired) + ") -> " + r.result + " x" +
+                                to_string(r.resultAmount) + "  [30s]";
+            int oreCnt = player.getItemCount(r.oreName);
+            int coalCnt = player.getItemCount("coal");
+            int steelCnt = player.getItemCount("steel");
 
-            if (putting) {
-                return vbox({
-                    text("              PUT MATERIALS") | bold | color(Color::Magenta),
-                    separator(),
-                    text("Select the ore and coal charge for the next batch."),
-                    text("Ore:  " + recipeName + " x" + to_string(oreQuantity)),
-                    hbox({ buttonOreMinus->Render(), buttonOrePlus->Render() }),
-                    text("Coal: coal x" + to_string(fuelQuantity)),
-                    hbox({ buttonFuelMinus->Render(), buttonFuelPlus->Render() }),
-                    text("PUT only stages the charge. Return and press LOAD to validate it."),
-                    buttonPutDone->Render(),
-                    }) | border | size(WIDTH, GREATER_THAN, 60);
-            }
+            auto status = furnace.getStatus();
+            Color statusCol = (status == "IDLE" || status == "DONE (collect)")
+                                ? Color::GrayDark : Color::Cyan;
 
             return vbox({
-                text("        BLAST FURNACE  //  CONTROL DECK") | bold | color(Color::Yellow),
+                text("        EARTH BLAST FURNACE  //  4-SLOT CONTROL") | bold | color(Color::Yellow),
                 separator(),
-
-                // 状态和配方信息
+                slotTabs->Render() | center,
+                separator(),
                 hbox({
-                    text("Status: ") | bold,
-                    text(status) | bold | color(furnace.isActive() ? Color::Cyan : Color::GrayDark),
-                }),
-                hbox({
-                    text("Current Recipe: ") | bold,
-                    text(recipeName) | color(Color::Cyan),
-                }),
-                hbox({
-                    text("Recipe Info: ") | bold,
-                    text(recipeInfo) | color(Color::Green),
+                    vbox({
+                        text(" RECIPES") | bold | color(Color::Cyan), separator(),
+                        recipeList->Render() | flex,
+                    }) | size(WIDTH, GREATER_THAN, 50) | flex,
+                    vbox({
+                        text(" FURNACE ART (24-frame loop)") | bold | color(Color::Cyan),
+                        separator(),
+                        artBox | center,
+                        separator(),
+                        progressRenderer->Render(),
+                    }) | size(WIDTH, EQUAL, 54),
                 }),
                 separator(),
-
-                hbox({ text(" CHARGE  ") | bold | color(Color::Magenta),
-                    text(recipeName + "  ") | color(Color::Red), text(to_string(selectedOre) + "   "),
-                    text("Coal  ") | color(Color::Yellow), text(to_string(coal) + "   "),
-                    text("Steel  ") | color(Color::Cyan), text(to_string(steel)) }),
-                separator(),
-
-                hbox({ text(" TEMPERATURE  ") | bold, text(temperatureText) | color(temperatureColor) }),
-                gauge(static_cast<float>(min(temperature, 1800)) / 1800.0f) |
-                    color(temperatureColor) | border,
-                hbox({ text(" HOLD TIME     ") | bold, text(heatText),
-                    text(furnace.isLoaded() ? "   Keep clicking BLOW AIR" : "   Load a batch to begin") |
-                        color(Color::GrayDark) }),
-                progressBar->Render() | border,
-
                 hbox({
-                    text(" INPUT: ") | bold,
-                    text(recipeName + " x" + to_string(oreQuantity) + "  +  coal x" +
-                        to_string(fuelQuantity)) | color(Color::Magenta),
+                    text(" Status: ") | bold, text(status) | color(statusCol), filler(),
+                    text(" Recipe: ") | bold, text(recipeInfo) | color(Color::Green),
                 }),
+                hbox({
+                    text(" Bag: ") | bold,
+                    text(r.oreName + " x" + to_string(oreCnt)) | color(Color::RedLight),
+                    text("   coal x" + to_string(coalCnt)) | color(Color::Yellow),
+                    text("   steel x" + to_string(steelCnt)) | color(Color::Cyan),
+                }),
+                separator(),
                 hbox({
                     buttonLoad->Render() | flex,
-                    buttonPut->Render() | flex,
-                    buttonBlower->Render() | flex,
+                    buttonCollect->Render() | flex,
                     buttonCancel->Render() | flex,
                     buttonClose->Render() | flex,
                 }),
-
                 separator(),
-
-                // 日志
                 text(" EVENT LOG") | bold | color(Color::Yellow),
                 logViewer->Render() | flex,
+                text(statusMessage) | color(Color::Green),
+                text("Tip: 4 slots run in parallel. DONE batches auto-deliver product. COLLECT to clear DONE.")
+                    | color(Color::GrayDark),
+            }) | border | size(WIDTH, GREATER_THAN, 106);
+        });
 
-                // 消息
-                text(statusMessage) | color(Color::Yellow),
-                text("Tip: temperature cools continuously. Green means the batch is being refined.") |
-                    color(Color::GrayDark),
-                }) | border | size(WIDTH, GREATER_THAN, 78);
-            });
-
-        mainContainer |= CatchEvent([&](Event event) {
-            if (event == Event::Custom) {
-                if (furnace.update(player)) {
-                    statusMessage = "Steel is ready! Batch completed.";
-                }
-                needRefresh = true;
-                return true;
-            }
+        // Event tick：openFurnaceUI 里的 thread 先调过 globalTick100ms，
+        // 这里只需要标记刷新即可（furnace.update 在 globalTick 内已经执行）。
+        mainContainer = mainContainer | CatchEvent([&](Event e) {
+            if (e == Event::Custom) { return true; }
             return false;
-            });
+        });
     }
 
-    Component getComponent() {
-        return mainContainer;
-    }
-
+    Component getComponent() { return mainContainer; }
     bool isRunning() { return running; }
-
-    void refresh() {
-        if (needRefresh) {
-            needRefresh = false;
-        }
-    }
+    void refresh() {}
 };
 
 // ======================== 车床 FTXUI 界面 ========================
@@ -1084,7 +1200,7 @@ private:
     PlayerData& player;
     ScreenInteractive& screen;
     bool running = true;
-    string statusMessage = "WELCOME TO THE LATHE!";
+    string statusMessage = "WELCOME TO THE LATHE! Requires power (2 EU/tick while machining).";
 
     Component mainContainer;
     Component moldList;
@@ -1127,8 +1243,7 @@ public:
                 statusMessage = "Steel sliding in...";
             }
             else {
-                if (!lathe.canLoadPower()) statusMessage = "No power! Connect a generator.";
-                else statusMessage = "Need steel for this mold.";
+                statusMessage = "Need steel for this mold.";
             }
             needRefresh = true;
             });
@@ -1158,7 +1273,7 @@ public:
             screen.ExitLoopClosure()();
             });
 
-        // 进度条
+        // 进度条：暂停时灰色
         progressBar = Renderer([&] {
             int prog = lathe.getProgress();
             int maxProg = lathe.getMaxProgress();
@@ -1169,8 +1284,13 @@ public:
             }
             bar += "]";
             string percent = to_string(prog) + "%";
-            return hbox({ text("  "), text(bar) | color(Color::Green),
-                text("  "), text(percent) });
+            bool paused = (lathe.getAnimState() == Lathe::Machining ||
+                           lathe.getAnimState() == Lathe::Inserting) && !lathe.getRunning();
+            Color col = paused ? Color::GrayLight : Color::Green;
+            return hbox({ text("  "), text(bar) | color(col),
+                text("  "), text(percent),
+                paused ? text("   ⚠ PAUSED (no power)") | color(Color::Yellow)
+                       : filler() });
             });
 
         // 日志查看器
@@ -1235,14 +1355,26 @@ public:
                     }) | border | size(WIDTH, GREATER_THAN, 60);
             }
             if (lathe.getAnimState() == Lathe::Machining) {
+                bool paused = !lathe.getRunning();
+                Elements eInfo;
+                eInfo.push_back(hbox({ text(" Status:   ") | bold,
+                    text("MACHINING (2 EU/tick)") | color(Color::Cyan) }));
+                eInfo.push_back(hbox({ text(" Mold:     ") | bold,
+                    text(lathe.getMoldInfo()) | color(Color::Green) }));
+                if (paused) {
+                    eInfo.push_back(text("⚠ PAUSED: No power. Feed coal at thermal generators!")
+                                    | color(Color::Yellow) | bold);
+                }
                 return vbox({
                     text("        LATHE  //  MACHINING") | bold | color(Color::Red),
+                    separator(),
+                    vbox(std::move(eInfo)) | border,
                     separator(),
                     artBox->Render(),
                     progressBar->Render() | border,
                     hbox({ buttonCancel->Render() | flex }),
                     text(statusMessage) | color(Color::Yellow),
-                    }) | border | size(WIDTH, GREATER_THAN, 60);
+                    }) | border | size(WIDTH, GREATER_THAN, 78);
             }
             if (lathe.getAnimState() == Lathe::Done) {
                 return vbox({
@@ -1258,11 +1390,12 @@ public:
             return vbox({
                 text("        LATHE  //  CONTROL DECK") | bold | color(Color::Yellow),
                 separator(),
-                hbox({ text(" Status: ") | bold, text(lathe.getStatus()) | color(Color::Cyan) }),
-                hbox({ text(" Mold:   ") | bold, text(lathe.getMoldInfo()) | color(Color::Green) }),
-                separator(),
-                hbox({ text(" STEEL  ") | bold | color(Color::Magenta),
-                    text("steel  ") | color(Color::Cyan), text(to_string(steel)) }),
+                hbox({ text(" Status:     ") | bold, text(lathe.getStatus()) | color(Color::Cyan) }),
+                hbox({ text(" Mold:       ") | bold, text(lathe.getMoldInfo()) | color(Color::Green) }),
+                hbox({ text(" Power:      ") | bold,
+                       text("(see Generator panel via E near a generator)") | color(Color::GrayDark) }),
+                hbox({ text(" STEEL:      ") | bold | color(Color::Magenta),
+                       text("x" + to_string(steel)) | color(Color::Cyan) }),
                 separator(),
                 artBox->Render(),
                 separator(),
@@ -1271,21 +1404,23 @@ public:
                 text(" EVENT LOG") | bold | color(Color::Yellow),
                 logViewer->Render() | flex,
                 text(statusMessage) | color(Color::Yellow),
-                text("Tip: pick a mold, then LOAD. Animation plays inside this window.") | color(Color::GrayDark),
-                }) | border | size(WIDTH, GREATER_THAN, 78);
+                text("Tip: 2 EU/tick consumed during machining. No power ⇒ machining pauses.") |
+                    color(Color::GrayDark),
+                }) | border | size(WIDTH, GREATER_THAN, 82);
             });
 
-        // tick 钩子：100ms 一次，同时推进进度与动画帧
+        // tick 钩子：openLatheUI 里的 thread 每 100ms 先调 globalTick100ms()
+        // （扣电 + 状态推进），然后再发 Event::Custom 到这里 —— 这里只刷新 UI。
         mainContainer |= CatchEvent([&](Event event) {
             if (event == Event::Custom) {
-                if (lathe.update(player)) {
+                if (lathe.getAnimState() == Lathe::Done) {
                     statusMessage = "Machining complete! Press COLLECT.";
                 }
                 needRefresh = true;
                 return true;
             }
             return false;
-            });
+        });
     }
 
     Component getComponent() { return mainContainer; }
@@ -1299,8 +1434,8 @@ public:
 };
 
 // ======================== 交易 FTXUI 界面 ========================
-// 图形化交易界面：左侧列表显示背包所有物品（含不可卖标注），
-// 右侧详情 + SELL ONE / SELL ALL / SELL EVERYTHING / CLOSE。
+// 图形化交易界面：左侧列表 + 右侧详情
+// Tab = SELL（原功能） / BUY（原材料/钢零件/蓝图购买，买入价=itemPrice*3；蓝图只买 1 次）
 class TradeUI {
 private:
     PlayerData& player;
@@ -1313,39 +1448,107 @@ private:
     Component buttonSellOne;
     Component buttonSellAll;
     Component buttonSellEverything;
+    Component buttonBuyOne;
     Component buttonClose;
     Component detailBox;
+    Component tabBar;
 
+    int tabSelected = 0;   // 0 = SELL, 1 = BUY
+    int lastTab = -1;      // 用于检测 tabBar 变化时触发 rebuildCurrentTab
     int selected = 0;
-    vector<string> entries;        // Menu 显示文本
-    vector<string> names;          // 对应物品名
-    vector<int>    quantities;     // 对应数量
-    vector<int>    prices;         // 对应单价
+    vector<string> tabLabels;
 
-    void rebuild() {
-        entries.clear();
-        names.clear();
-        quantities.clear();
-        prices.clear();
+    // ===== SELL tab data =====
+    vector<string> sellEntries;
+    vector<string> sellNames;
+    vector<int>    sellQty;
+    vector<int>    sellPrices;
+
+    // ===== BUY tab data =====
+    // 固定条目：原材料 + 钢零件 + 蓝图（2 项）
+    struct BuyEntry {
+        string label;       // Radiobox 文本
+        string itemName;    // 物品名（蓝图留空，看 isBlueprint）
+        int buyPrice;       // 买入价（c）
+        bool isBlueprint = false;
+        bool genBlueprint = false;  // true=发电机蓝图 false=电线蓝图
+    };
+    vector<BuyEntry> buyEntries;
+    // buyLabels 必须是类成员：Menu 组件和 Renderer 都要持有它的指针/引用，
+    // 局部变量会在 setupUI() 返回后析构导致悬空引用（点 BUY 1 重渲染即崩）。
+    vector<string> buyLabels;
+
+    bool& genBPUnlocked;
+    bool& wireBPUnlocked;
+
+    void rebuildSell() {
+        sellEntries.clear(); sellNames.clear(); sellQty.clear(); sellPrices.clear();
         for (auto& item : player.inventory) {
             if (item.quantity > 0) {
-                int price = itemPrice(item.name);
-                names.push_back(item.name);
-                quantities.push_back(item.quantity);
-                prices.push_back(price);
+                int p = itemPrice(item.name);
+                sellNames.push_back(item.name);
+                sellQty.push_back(item.quantity);
+                sellPrices.push_back(p);
                 string line = "  " + item.name + "  x" + to_string(item.quantity);
-                line += price > 0 ? ("   [" + to_string(price) + "c]") : "   [not sellable]";
-                entries.push_back(line);
+                line += p > 0 ? ("   [" + to_string(p) + "c]") : "   [not sellable]";
+                sellEntries.push_back(line);
             }
         }
-        if (entries.empty()) {
-            entries.push_back("  (backpack empty)");
-            names.push_back("");
-            quantities.push_back(0);
-            prices.push_back(0);
+        if (sellEntries.empty()) {
+            sellEntries.push_back("  (backpack empty)");
+            sellNames.push_back(""); sellQty.push_back(0); sellPrices.push_back(0);
         }
-        if (selected >= (int)entries.size()) selected = (int)entries.size() - 1;
-        if (selected < 0) selected = 0;
+    }
+
+    void rebuildBuy() {
+        buyEntries.clear();
+        // 1. 原材料 (itemPrice * 3 向上取整为整数)
+        vector<string> rawNames = { "hematite","magnetite","bauxite","cassiterite","malachite",
+                                     "chalcopyrite","gold_ore","silver_ore","coal","sand","glass",
+                                     "steel","iron_ingot","alloy" };
+        for (auto& n : rawNames) {
+            int base = itemPrice(n);
+            int bp = base * 3;
+            if (bp <= 0) bp = 10;
+            buyEntries.push_back({ "  " + n + "   [" + to_string(bp) + "c]   x1", n, bp, false, false });
+        }
+        // 2. 钢零件
+        vector<string> partNames = { "steel_gear","steel_rod","steel_plate","steel_spring",
+                                      "steel_bolt","steel_wire" };
+        for (auto& n : partNames) {
+            int base = itemPrice(n);
+            int bp = max(base * 3, 30);
+            buyEntries.push_back({ "  " + n + "   [" + to_string(bp) + "c]   x1", n, bp, false, false });
+        }
+        // 3. 蓝图（底价 150 / 50）
+        {
+            string label = genBPUnlocked ? "  [OWNED] Generator Blueprint (150c)"
+                                          : "  Generator Blueprint   [150c]";
+            buyEntries.push_back({ label, "", 150, true, true });
+        }
+        {
+            string label = wireBPUnlocked ? "  [OWNED] Wire Blueprint (50c)"
+                                          : "  Wire Blueprint   [50c]";
+            buyEntries.push_back({ label, "", 50, true, false });
+        }
+    }
+
+    // 由 buyEntries 同步出 menu 用的标签 vector。必须是成员函数：lambda 捕获会随
+    // setupUI 返回而悬空。
+    void genBuyLabels() {
+        rebuildBuy();
+        buyLabels.clear();
+        for (auto& e : buyEntries) buyLabels.push_back(e.label);
+    }
+
+    void rebuildCurrentTab() {
+        if (tabSelected == 0) {
+            rebuildSell();
+        }
+        else {
+            rebuildBuy();
+        }
+        selected = 0;
     }
 
     void checkLevelUpInternal() {
@@ -1358,50 +1561,59 @@ private:
         }
     }
 
-    bool validSelection() {
-        if (selected < 0 || selected >= (int)names.size()) return false;
-        if (names[selected].empty()) return false;
-        return prices[selected] > 0 && quantities[selected] > 0;
+    bool validSellSelection() {
+        if (selected < 0 || selected >= (int)sellNames.size()) return false;
+        if (sellNames[selected].empty()) return false;
+        return sellPrices[selected] > 0 && sellQty[selected] > 0;
     }
 
 public:
-    TradeUI(PlayerData& p, ScreenInteractive& s) : player(p), screen(s) {
+    // 构造函数新增两个蓝图 bool 引用
+    TradeUI(PlayerData& p, ScreenInteractive& s,
+            bool& genBP, bool& wireBP)
+        : player(p), screen(s), genBPUnlocked(genBP), wireBPUnlocked(wireBP) {
         setupUI();
     }
 
     void setupUI() {
-        rebuild();
-        menu = Menu(&entries, &selected);
+        rebuildCurrentTab();
 
+        // ===== 共享按钮：CLOSE =====
+        buttonClose = Button("CLOSE", [&] {
+            running = false;
+            screen.ExitLoopClosure()();
+        });
+
+        // ===== SELL 按钮 =====
         buttonSellOne = Button("SELL ONE", [&] {
-            if (!validSelection()) { statusMessage = "Cannot sell this."; return; }
-            string name = names[selected];
+            if (tabSelected != 0) return;
+            if (!validSellSelection()) { statusMessage = "Cannot sell this."; return; }
+            string name = sellNames[selected];
             if (player.removeItem(name, 1)) {
-                int total = prices[selected];
+                int total = sellPrices[selected];
                 player.coins += total;
                 player.exp += 5;
                 statusMessage = "Sold " + name + " x1, +" + to_string(total) + "c";
-                rebuild();
+                rebuildSell();
                 checkLevelUpInternal();
             }
-            });
-
+        });
         buttonSellAll = Button("SELL ALL", [&] {
-            if (!validSelection()) { statusMessage = "Cannot sell this."; return; }
-            string name = names[selected];
-            int qty = quantities[selected];
+            if (tabSelected != 0) return;
+            if (!validSellSelection()) { statusMessage = "Cannot sell this."; return; }
+            string name = sellNames[selected];
+            int qty = sellQty[selected];
             if (player.removeItem(name, qty)) {
-                int total = prices[selected] * qty;
+                int total = sellPrices[selected] * qty;
                 player.coins += total;
                 player.exp += qty * 5;
                 statusMessage = "Sold " + name + " x" + to_string(qty) + ", +" + to_string(total) + "c";
-                rebuild();
+                rebuildSell();
                 checkLevelUpInternal();
             }
-            });
-
+        });
         buttonSellEverything = Button("SELL EVERYTHING", [&] {
-            // 先收集要卖的，避免边遍历边改 inventory
+            if (tabSelected != 0) return;
             vector<pair<string, int>> toSell;
             for (auto& item : player.inventory) {
                 if (item.quantity > 0 && itemPrice(item.name) > 0) {
@@ -1421,622 +1633,191 @@ public:
             statusMessage = totalItems > 0
                 ? "Sold " + to_string(totalItems) + " items, +" + to_string(totalCoins) + "c"
                 : "Nothing sellable.";
-            rebuild();
+            rebuildSell();
             checkLevelUpInternal();
-            });
+        });
 
-        buttonClose = Button("CLOSE", [&] {
-            running = false;
-            screen.ExitLoopClosure()();
-            });
-
-        detailBox = Renderer([&] {
-            if (selected < 0 || selected >= (int)names.size() || names[selected].empty()) {
-                return vbox({ text("  No item selected.") }) | border;
+        // ===== BUY 按钮 =====
+        buttonBuyOne = Button("BUY 1", [&] {
+            if (tabSelected != 1) return;
+            rebuildBuy();  // 刷新蓝图 OWNED 状态，防止 label 过期
+            if (selected < 0 || selected >= (int)buyEntries.size()) return;
+            BuyEntry& e = buyEntries[selected];
+            if (player.coins < e.buyPrice) {
+                statusMessage = "Not enough coins.";
+                return;
             }
-            string name = names[selected];
-            int qty = quantities[selected];
-            int price = prices[selected];
-            int value = price * qty;
-            return vbox({
-                text("  Item:   " + name) | bold,
-                text("  Stock:  x" + to_string(qty)),
-                text("  Price:  " + to_string(price) + "c each"),
-                text("  Total:  " + to_string(value) + "c"),
-                separator(),
-                price > 0 ? text("  Sellable.") | color(Color::Green)
-                          : text("  Not sellable here.") | color(Color::Red),
+            if (e.isBlueprint) {
+                bool& flag = e.genBlueprint ? genBPUnlocked : wireBPUnlocked;
+                if (flag) {
+                    statusMessage = "You already own this blueprint.";
+                    return;
+                }
+                player.coins -= e.buyPrice;
+                flag = true;
+                player.exp += 15;
+                statusMessage = e.genBlueprint ? "Unlocked: Generator Blueprint!" : "Unlocked: Wire Blueprint!";
+                checkLevelUpInternal();
+            }
+            else {
+                if (e.itemName.empty()) return;
+                // 原材料/零件：直接 addItem (type = "material", 买入价 ≈ itemPrice*3，
+                // 这里 itemPrice 本身是原价，我们用 buyPrice/3 作为记录 basePrice，避免零除）
+                int basePrice = max(1, e.buyPrice / 3);
+                player.addItem(e.itemName, 1, "material", basePrice);
+                player.coins -= e.buyPrice;
+                player.exp += 2;
+                statusMessage = "Bought " + e.itemName + " x1, -" + to_string(e.buyPrice) + "c";
+                checkLevelUpInternal();
+            }
+        });
+
+        // ===== Tab + Menu Radiobox =====
+        tabLabels = { "  SELL  ","  BUY  " };
+        tabBar = Radiobox(&tabLabels, &tabSelected);
+        // 任何键盘事件后都检查 tabSelected 是否变化：变化就 rebuild（让 BUY 的 [OWNED]
+        // 标签和 selected 索引立即同步，不依赖按回车）。
+        tabBar |= CatchEvent([&](Event e) {
+            if (tabSelected != lastTab) {
+                lastTab = tabSelected;
+                rebuildCurrentTab();
+            }
+            return false;
+        });
+
+        // 菜单一共有两个：SELL 和 BUY。用 Maybe 门控，让非当前 tab 的 Menu 失活，
+        // 这样 FTXUI 容器焦点才会落到当前 tab 的菜单上（之前 BUY 选不中的根因）。
+        Component menuSell = Menu(&sellEntries, &selected);
+        // BUY 菜单：每次渲染前重建 buyLabels（类成员，避免悬空引用）
+        // 注意：Renderer 的 lambda 必须按值捕获子组件 menuBuyChild，
+        // 不能用 [&] —— 否则 menuBuy 重新赋值后引用会指向 Renderer 自身，调用 Render 时递归。
+        genBuyLabels();
+        Component menuBuy = Menu(&buyLabels, &selected);
+        Component menuBuyChild = menuBuy;
+        menuBuy = Renderer(menuBuyChild, [this, menuBuyChild] {
+            genBuyLabels();
+            if (selected >= (int)buyLabels.size()) selected = 0;
+            return menuBuyChild->Render();
+        });
+        auto showSellTab = [this] { return tabSelected == 0; };
+        auto showBuyTab  = [this] { return tabSelected == 1; };
+        menu = Container::Vertical({
+            Maybe(menuSell, showSellTab),
+            Maybe(menuBuy,  showBuyTab),
+        });
+
+        // ===== 详情 renderer =====
+        detailBox = Renderer([&] {
+            if (tabSelected == 0) {
+                // SELL
+                if (selected < 0 || selected >= (int)sellNames.size() || sellNames[selected].empty()) {
+                    return vbox({ text("  No item selected.") }) | border;
+                }
+                string name = sellNames[selected];
+                int qty = sellQty[selected];
+                int price = sellPrices[selected];
+                int value = price * qty;
+                return vbox({
+                    text("  Item:   " + name) | bold,
+                    text("  Stock:  x" + to_string(qty)),
+                    text("  Price:  " + to_string(price) + "c each"),
+                    text("  Total:  " + to_string(value) + "c"),
+                    separator(),
+                    price > 0 ? text("  Sellable.") | color(Color::Green)
+                              : text("  Not sellable here.") | color(Color::Red),
                 }) | border | size(WIDTH, GREATER_THAN, 36);
-            });
+            }
+            else {
+                // BUY
+                rebuildBuy();
+                if (selected < 0 || selected >= (int)buyEntries.size()) {
+                    return vbox({ text("  No item selected.") }) | border;
+                }
+                BuyEntry& e = buyEntries[selected];
+                if (e.isBlueprint) {
+                    bool owned = e.genBlueprint ? genBPUnlocked : wireBPUnlocked;
+                    return vbox({
+                        text("  " + string(e.genBlueprint ? "GENERATOR" : "WIRE") + " BLUEPRINT") | bold | color(Color::Yellow),
+                        separator(),
+                        text("  Cost:   " + to_string(e.buyPrice) + "c"),
+                        text("  Owned:  " + string(owned ? "YES [OWNED]" : "NO")),
+                        separator(),
+                        owned ? text("  Already unlocked.") | color(Color::Cyan)
+                              : text("  One-time unlock blueprint."),
+                    }) | border | size(WIDTH, GREATER_THAN, 36);
+                }
+                return vbox({
+                    text("  Item:   " + e.itemName) | bold,
+                    text("  Cost:   " + to_string(e.buyPrice) + "c each"),
+                    text("  Coins:  " + to_string(player.coins) + "c"),
+                    separator(),
+                    text("  Raw material / machine part."),
+                }) | border | size(WIDTH, GREATER_THAN, 36);
+            }
+        });
 
-        auto layout = Container::Vertical({
-            Container::Horizontal({
-                menu | flex,
-                Container::Vertical({
-                    buttonSellOne,
-                    buttonSellAll,
-                    buttonSellEverything,
-                    buttonClose,
-                }),
-            }),
-            });
+        // ===== 布局：顶部 Tab，左侧菜单，右侧详情+按钮 =====
+        // tabBar 必须挂进 main 容器，否则键盘焦点进不去（之前 BUY 选不了的根因之二）。
+        // menuSell / menuBuy 用 Maybe 门控，让非当前 tab 的 Menu 失活。
+        auto main = Container::Vertical({
+            tabBar,
+            Maybe(menuSell, showSellTab),
+            Maybe(menuBuy,  showBuyTab),
+            buttonSellOne, buttonSellAll, buttonSellEverything, buttonBuyOne, buttonClose,
+        });
 
-        mainContainer = Renderer(layout, [&] {
+        mainContainer = Renderer(main, [&, menuSell, menuBuy] {
+            auto topBar = hbox({
+                text(" TAB: ") | bold,
+                tabBar->Render(),
+            }) | border;
             return vbox({
                 text("            $ TRADING MARKET $") | bold | color(Color::Yellow),
                 separator(),
                 hbox({ text(" Coins: ") | bold, text(to_string(player.coins)) | color(Color::Yellow) }),
                 separator(),
+                topBar,
+                separator(),
                 hbox({
                     vbox({
-                        text(" YOUR BACKPACK") | bold | color(Color::Cyan),
+                        text(tabSelected == 0 ? " YOUR BACKPACK" : " BUY CATALOG") | bold | color(Color::Cyan),
                         separator(),
-                        menu->Render() | flex,
+                        (tabSelected == 0 ? menuSell->Render() : menuBuy->Render()) | flex,
                     }) | flex,
                     vbox({
                         detailBox->Render(),
                         separator(),
-                        buttonSellOne->Render() | flex,
-                        buttonSellAll->Render() | flex,
-                        buttonSellEverything->Render() | flex,
-                        separator(),
-                        buttonClose->Render() | flex,
+                        tabSelected == 0 ? vbox({
+                            buttonSellOne->Render() | flex,
+                            buttonSellAll->Render() | flex,
+                            buttonSellEverything->Render() | flex,
+                            separator(),
+                            buttonClose->Render() | flex,
+                        }) : vbox({
+                            buttonBuyOne->Render() | flex,
+                            separator(),
+                            buttonClose->Render() | flex,
+                        }),
                     }),
                 }) | flex,
                 separator(),
                 text(statusMessage) | color(Color::Green),
-                text("Tip: UP/DOWN select, SELL ONE/ALL for one item, SELL EVERYTHING clears all sellables.") | color(Color::GrayDark),
-                }) | border | size(WIDTH, GREATER_THAN, 78);
-            });
-    }
+                text(tabSelected == 0
+                    ? string("Tip: UP/DOWN on TAB to switch SELL/BUY; LEFT item pick; SELL buttons to sell.")
+                    : string("Tip: UP/DOWN on TAB to switch SELL/BUY; LEFT item pick; BUY 1 to purchase (blueprints one-shot)."))
+                    | color(Color::GrayDark),
+            }) | border | size(WIDTH, GREATER_THAN, 84);
+        });
 
-    Component getComponent() { return mainContainer; }
-    bool isRunning() { return running; }
-};
-
-// ======================== 电力 / 水路 网络 ========================
-// 真实电网：发电机+电线做 BFS 连通分量，按 genSum vs demandSum 判定通电。
-// 水网：管道做 BFS 连通分量，分量含 '~' 水源或邻水的 'K' 泵则该分量有水。
-// 引导期：generators 为空时 hasPower 恒 true（避免没电没法炼钢、没钢没法建发电机）。
-struct Generator {
-    int x = 0, y = 0;
-    int waterLevel = 0;   // 0..100
-    int coalLevel = 0;    // 0..100
-    int maxOutput = 100;
-    int tickAccumMs = 0;  // 用于煤炭/水消耗速率
-};
-
-struct Pump {
-    int x = 0, y = 0;
-};
-
-class PowerNetwork {
-private:
-    GameMap* mapPtr = nullptr;
-    vector<Generator> generators;
-    vector<Pump> pumps;
-    map<pair<int, int>, bool> poweredMap;      // 消费者 (x,y)->通电
-    set<pair<int, int>> wateredPipeCells;       // 有水的管道格
-
-    static bool inBounds(int x, int y) { return x >= 0 && y >= 0; }
-
-    bool pumpAdjacentToWater(int x, int y) const {
-        if (!mapPtr) return false;
-        static const int dx[4] = { 1,-1,0,0 };
-        static const int dy[4] = { 0,0,1,-1 };
-        for (int i = 0; i < 4; ++i) {
-            const Tile& t = mapPtr->getTile(x + dx[i], y + dy[i]);
-            if (t.display == '~') return true;
-        }
-        return false;
-    }
-
-    int demandOf(char display) const {
-        if (display == 'F') return 50;   // Blast Furnace
-        if (display == 'L') return 30;   // Lathe
-        return 0;
-    }
-
-public:
-    void bind(GameMap& m) { mapPtr = &m; }
-
-    bool hasGenerators() const { return !generators.empty(); }
-
-    // generators 为空 = 引导期，F/L 免费运行
-    bool hasPower(int x, int y) const {
-        if (generators.empty()) return true;
-        auto it = poweredMap.find({ x, y });
-        return it != poweredMap.end() ? it->second : false;
-    }
-
-    bool hasWater(int x, int y) const {
-        return wateredPipeCells.count({ x, y }) > 0;
-    }
-
-    void recompute() {
-        poweredMap.clear();
-        wateredPipeCells.clear();
-        if (!mapPtr || mapPtr->getArea() != Area::Home) return;
-        int W = 60, H = 50;  // Home 地图尺寸
-
-        // ---- 水网 BFS：管道连通分量 ----
-        vector<vector<bool>> visited(H, vector<bool>(W, false));
-        for (int sy = 0; sy < H; ++sy) {
-            for (int sx = 0; sx < W; ++sx) {
-                if (mapPtr->getTile(sx, sy).pipe == 0 || visited[sy][sx]) continue;
-                vector<pair<int, int>> component;
-                vector<pair<int, int>> stack = { {sx, sy} };
-                visited[sy][sx] = true;
-                while (!stack.empty()) {
-                    auto [cx, cy] = stack.back(); stack.pop_back();
-                    component.push_back({ cx, cy });
-                    static const int dx[4] = { 1,-1,0,0 };
-                    static const int dy[4] = { 0,0,1,-1 };
-                    for (int i = 0; i < 4; ++i) {
-                        int nx = cx + dx[i], ny = cy + dy[i];
-                        if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
-                        if (visited[ny][nx]) continue;
-                        if (mapPtr->getTile(nx, ny).pipe != 0) {
-                            visited[ny][nx] = true;
-                            stack.push_back({ nx, ny });
-                        }
-                    }
-                }
-                // 分量是否有水：某管道格邻 '~'，或格上有 'K' 且泵邻水
-                bool wet = false;
-                for (auto& [px, py] : component) {
-                    const Tile& t = mapPtr->getTile(px, py);
-                    if (t.display == 'K' && pumpAdjacentToWater(px, py)) { wet = true; break; }
-                    static const int dx[4] = { 1,-1,0,0 };
-                    static const int dy[4] = { 0,0,1,-1 };
-                    for (int i = 0; i < 4; ++i) {
-                        if (mapPtr->getTile(px + dx[i], py + dy[i]).display == '~') { wet = true; break; }
-                    }
-                    if (wet) break;
-                }
-                if (wet) for (auto& c : component) wateredPipeCells.insert(c);
-            }
-        }
-
-        // ---- 电网 BFS：电线连通分量 ----
-        vector<vector<bool>> visited2(H, vector<bool>(W, false));
-        for (int sy = 0; sy < H; ++sy) {
-            for (int sx = 0; sx < W; ++sx) {
-                if (mapPtr->getTile(sx, sy).wire == 0 || visited2[sy][sx]) continue;
-                vector<pair<int, int>> component;
-                vector<pair<int, int>> stack = { {sx, sy} };
-                visited2[sy][sx] = true;
-                while (!stack.empty()) {
-                    auto [cx, cy] = stack.back(); stack.pop_back();
-                    component.push_back({ cx, cy });
-                    static const int dx[4] = { 1,-1,0,0 };
-                    static const int dy[4] = { 0,0,1,-1 };
-                    for (int i = 0; i < 4; ++i) {
-                        int nx = cx + dx[i], ny = cy + dy[i];
-                        if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
-                        if (visited2[ny][nx]) continue;
-                        if (mapPtr->getTile(nx, ny).wire != 0) {
-                            visited2[ny][nx] = true;
-                            stack.push_back({ nx, ny });
-                        }
-                    }
-                }
-                // 累加发电与耗电
-                int genSum = 0, demandSum = 0;
-                vector<pair<int, int>> consumers;
-                for (auto& [px, py] : component) {
-                    const Tile& t = mapPtr->getTile(px, py);
-                    if (t.display == 'G') {
-                        Generator* g = generatorAt(px, py);
-                        if (g && g->waterLevel > 0 && g->coalLevel > 0 && hasWater(px, py)) {
-                            genSum += g->maxOutput;
-                        }
-                    }
-                    int d = demandOf(t.display);
-                    if (d > 0) { demandSum += d; consumers.push_back({ px, py }); }
-                }
-                bool powered = genSum >= demandSum;
-                for (auto& c : consumers) poweredMap[c] = powered;
-            }
-        }
-    }
-
-    void tick(PlayerData& player, int elapsedMs = 100) {
-        for (auto& g : generators) {
-            g.tickAccumMs += elapsedMs;
-            int waterT = 0, coalT = 0;
-            while (g.tickAccumMs >= 100) {
-                g.tickAccumMs -= 100;
-                waterT++; coalT++;
-                if (waterT >= 30) { waterT = 0; g.waterLevel = max(0, g.waterLevel - 1); }
-                if (coalT >= 50) { coalT = 0; g.coalLevel = max(0, g.coalLevel - 1); }
-            }
-        }
-        recompute();
-    }
-
-    void placeGenerator(int x, int y) { generators.push_back({ x, y }); }
-    void placePump(int x, int y) { pumps.push_back({ x, y }); }
-
-    void removeMachine(int x, int y) {
-        generators.erase(remove_if(generators.begin(), generators.end(),
-            [&](const Generator& g) { return g.x == x && g.y == y; }), generators.end());
-        pumps.erase(remove_if(pumps.begin(), pumps.end(),
-            [&](const Pump& p) { return p.x == x && p.y == y; }), pumps.end());
-    }
-
-    Generator* generatorAt(int x, int y) {
-        for (auto& g : generators) if (g.x == x && g.y == y) return &g;
-        return nullptr;
-    }
-
-    void clear() { generators.clear(); pumps.clear(); poweredMap.clear(); wateredPipeCells.clear(); }
-
-    vector<Generator>& getGenerators() { return generators; }
-
-    void save(ostream& out) const {
-        out << "POWER_NET " << generators.size() << ' ' << pumps.size() << '\n';
-        for (const auto& g : generators)
-            out << g.x << ' ' << g.y << ' ' << g.waterLevel << ' ' << g.coalLevel << '\n';
-        for (const auto& p : pumps)
-            out << p.x << ' ' << p.y << '\n';
-    }
-
-    bool load(istream& in, int version) {
-        clear();
-        if (version < 3) return true;  // v2 无此段
-        // v3：可选段，用 peek 判存在
-        if (in.peek() != 'P') { in.clear(); return true; }
-        string tag;
-        if (!(in >> tag) || tag != "POWER_NET") { in.clear(); return true; }
-        size_t genCount = 0, pumpCount = 0;
-        if (!(in >> genCount >> pumpCount)) return false;
-        for (size_t i = 0; i < genCount; ++i) {
-            Generator g;
-            if (!(in >> g.x >> g.y >> g.waterLevel >> g.coalLevel)) return false;
-            generators.push_back(g);
-        }
-        for (size_t i = 0; i < pumpCount; ++i) {
-            Pump p;
-            if (!(in >> p.x >> p.y)) return false;
-            pumps.push_back(p);
-        }
-        return true;
-    }
-};
-
-// ---- F/L 门控：延迟定义（PowerNetwork 此处已完整可见）----
-// BlastFurnace::canLoad / canLoadPower
-bool BlastFurnace::canLoad(PlayerData& player) {
-    Recipe& r = recipes[selectedRecipe];
-    return !isRunning &&
-        (powerNet == nullptr || powerNet->hasPower(gx, gy)) &&
-        player.hasItem(r.oreName, r.oreRequired) &&
-        player.hasItem("coal", r.fuelRequired);
-}
-bool BlastFurnace::canLoadPower() {
-    return powerNet == nullptr || powerNet->hasPower(gx, gy);
-}
-
-// Lathe::canLoad / canLoadPower
-bool Lathe::canLoad(PlayerData& player) {
-    if (animState != Idle) return false;
-    if (powerNet != nullptr && !powerNet->hasPower(gx, gy)) return false;
-    return player.hasItem("steel", molds[selectedMold].steelRequired);
-}
-bool Lathe::canLoadPower() {
-    return powerNet == nullptr || powerNet->hasPower(gx, gy);
-}
-
-// ======================== 建造 FTXUI 界面（B 键子图缩放）========================
-// 11×11 放大视图：每格 3 宽×2 高（顶行=管道/电线层标记，底行=地形/机器）。
-// 模式 Radiobox：Pipe/Wire/Generator/Pump/Remove/Exit（数字键 1-6 直选）。
-// 方向键移光标，Enter 放置；Generator 模式下光标在 'G' 上按 Enter 打开发电机面板。
-// 发电机面板与建造视图共用一个 ScreenInteractive + ticker 线程（简化首版）。
-class BuildUI {
-private:
-    GameMap& gameMap;
-    PowerNetwork& powerNet;
-    PlayerData& player;
-    ScreenInteractive& screen;
-    bool running = true;
-    string statusMessage = "BUILD: arrows=move, 1-6=mode, Enter=place, Q=close";
-
-    int cx, cy;            // 光标位置（独立于 player 坐标）
-    int selectedMode = 0;  // 0=Pipe 1=Wire 2=Generator 3=Pump 4=Remove 5=Exit
-
-    enum PanelMode { MapPanel, GeneratorPanel } panelMode = MapPanel;
-    int genX = 0, genY = 0;  // 当前打开发电机面板的机器坐标
-
-    Component mainContainer;
-    Component modeList;
-    Component buttonAddWater, buttonAddCoal, buttonGenClose;
-    Component mapRenderer;
-    Component infoBox;
-
-    std::vector<std::string> modes = { "Pipe", "Wire", "Generator", "Pump", "Remove", "Exit" };
-
-    // COLOR_* int -> FTXUI Color
-    static Color toColor(int c) {
-        switch (c) {
-        case COLOR_BLUE: return Color::Blue;
-        case COLOR_GREEN: return Color::Green;
-        case COLOR_CYAN: return Color::Cyan;
-        case COLOR_RED: return Color::Red;
-        case COLOR_YELLOW: return Color::Yellow;
-        case COLOR_GREY: return Color::GrayDark;
-        case COLOR_DARK_GREEN: return Color::DarkGreen;
-        case COLOR_DARK_RED: return Color::DarkRed;
-        case COLOR_DARK_YELLOW: return Color::YellowLight;
-        case COLOR_PURPLE: return Color::Magenta;
-        case COLOR_LIGHT_WHITE: return Color::White;
-        case COLOR_DARK_BLUE: return Color::DarkBlue;
-        case COLOR_DARK_CYAN: return Color::DarkCyan;
-        case COLOR_BLACK: return Color::Black;
-        default: return Color::White;
-        }
-    }
-
-    bool adjacentToWater(int x, int y) {
-        static const int dx[4] = { 1,-1,0,0 };
-        static const int dy[4] = { 0,0,1,-1 };
-        for (int i = 0; i < 4; ++i) {
-            if (gameMap.getTile(x + dx[i], y + dy[i]).display == '~') return true;
-        }
-        return false;
-    }
-
-    void placeAt(int x, int y) {
-        if (selectedMode == 5) { running = false; screen.ExitLoopClosure()(); return; }
-        Tile& t = gameMap.getTile(x, y);
-
-        if (selectedMode == 0) {  // Pipe
-            t.pipe = 'p';
-            powerNet.recompute();
-            statusMessage = "Pipe laid at (" + to_string(x) + "," + to_string(y) + ")";
-        }
-        else if (selectedMode == 1) {  // Wire
-            t.wire = 'w';
-            powerNet.recompute();
-            statusMessage = "Wire laid at (" + to_string(x) + "," + to_string(y) + ")";
-        }
-        else if (selectedMode == 2) {  // Generator
-            if (t.display == 'G') {
-                // 已有发电机 → 打开发电机面板
-                genX = x; genY = y; panelMode = GeneratorPanel;
-                buttonAddWater->TakeFocus();
-                statusMessage = "Generator panel opened.";
-                return;
-            }
-            if (x == player.x && y == player.y) { statusMessage = "Cannot build on your tile - move first."; return; }
-            if (!t.passable || t.display != '.') { statusMessage = "Need empty ground for generator."; return; }
-            if (!player.hasItem("steel", 5)) { statusMessage = "Need 5 steel for generator."; return; }
-            player.removeItem("steel", 5);
-            t.display = 'G'; t.name = "Generator"; t.passable = false; t.color = COLOR_YELLOW;
-            powerNet.placeGenerator(x, y);
-            powerNet.recompute();
-            statusMessage = "Generator placed! -5 steel. Add water+coal to start.";
-        }
-        else if (selectedMode == 3) {  // Pump
-            if (x == player.x && y == player.y) { statusMessage = "Cannot build on your tile - move first."; return; }
-            if (!t.passable || t.display != '.') { statusMessage = "Need empty ground for pump."; return; }
-            if (!adjacentToWater(x, y)) { statusMessage = "Pump must be adjacent to water (~)."; return; }
-            if (!player.hasItem("steel", 3)) { statusMessage = "Need 3 steel for pump."; return; }
-            player.removeItem("steel", 3);
-            t.display = 'K'; t.name = "Pump"; t.passable = false; t.color = COLOR_CYAN;
-            powerNet.placePump(x, y);
-            powerNet.recompute();
-            statusMessage = "Pump placed! -3 steel. It feeds adjacent pipes.";
-        }
-        else if (selectedMode == 4) {  // Remove
-            if (t.display == 'G' || t.display == 'K') {
-                powerNet.removeMachine(x, y);
-                t.display = '.'; t.name = "Grass"; t.passable = true; t.color = COLOR_GREEN;
-                powerNet.recompute();
-                statusMessage = "Machine removed at (" + to_string(x) + "," + to_string(y) + ") - no refund.";
-            }
-            else if (t.pipe != 0) { t.pipe = 0; powerNet.recompute(); statusMessage = "Pipe removed."; }
-            else if (t.wire != 0) { t.wire = 0; powerNet.recompute(); statusMessage = "Wire removed."; }
-            else { statusMessage = "Nothing to remove here."; }
-        }
-    }
-
-public:
-    BuildUI(GameMap& m, PowerNetwork& pn, PlayerData& p, ScreenInteractive& s, int startX, int startY)
-        : gameMap(m), powerNet(pn), player(p), screen(s), cx(startX), cy(startY) {
-        setupUI();
-    }
-
-    void setupUI() {
-        modeList = Radiobox(&modes, &selectedMode);
-
-        buttonAddWater = Button("ADD WATER", [&] {
-            Generator* g = powerNet.generatorAt(genX, genY);
-            if (!g) { panelMode = MapPanel; statusMessage = "Generator gone."; return; }
-            if (!player.hasItem("water", 1)) { statusMessage = "No water in inventory."; return; }
-            if (g->waterLevel >= 100) { statusMessage = "Water tank full."; return; }
-            player.removeItem("water", 1);
-            g->waterLevel = min(100, g->waterLevel + 25);
-            powerNet.recompute();
-            statusMessage = "+25 water. Tank at " + to_string(g->waterLevel) + "%";
-            });
-        buttonAddCoal = Button("ADD COAL", [&] {
-            Generator* g = powerNet.generatorAt(genX, genY);
-            if (!g) { panelMode = MapPanel; statusMessage = "Generator gone."; return; }
-            if (!player.hasItem("coal", 1)) { statusMessage = "No coal in inventory."; return; }
-            if (g->coalLevel >= 100) { statusMessage = "Coal hopper full."; return; }
-            player.removeItem("coal", 1);
-            g->coalLevel = min(100, g->coalLevel + 25);
-            powerNet.recompute();
-            statusMessage = "+25 coal. Hopper at " + to_string(g->coalLevel) + "%";
-            });
-        buttonGenClose = Button("CLOSE", [&] {
-            panelMode = MapPanel;
-            statusMessage = "Returned to build view.";
-            });
-
-        // 11×11 放大地图渲染器（以光标为中心，边界裁剪）
-        mapRenderer = Renderer([&] {
-            const int VIEW = 11;
-            int halfV = VIEW / 2;
-            int mapW = gameMap.getWidth();
-            int mapH = gameMap.getHeight();
-            int vx0 = (mapW <= VIEW) ? 0 : max(0, min(cx - halfV, mapW - VIEW));
-            int vy0 = (mapH <= VIEW) ? 0 : max(0, min(cy - halfV, mapH - VIEW));
-
-            Elements rows;
-            for (int dy = 0; dy < VIEW; ++dy) {
-                int y = vy0 + dy;
-                if (y >= mapH) break;
-                Elements topRow, botRow;
-                for (int dx = 0; dx < VIEW; ++dx) {
-                    int x = vx0 + dx;
-                    if (x >= mapW) {
-                        topRow.push_back(text("   "));
-                        botRow.push_back(text("   "));
-                        continue;
-                    }
-                    const Tile& t = gameMap.getTile(x, y);
-                    char pipeCh = t.pipe != 0 ? 'p' : '.';
-                    char wireCh = t.wire != 0 ? 'w' : '.';
-                    bool isCursor = (x == cx && y == cy);
-                    string top = string(1, pipeCh) + string(1, wireCh) + " ";
-                    string bot = isCursor
-                        ? string("[") + string(1, t.display) + string("]")
-                        : string(" ") + string(1, t.display) + string(" ");
-                    Element topElem = text(top) | color(Color::GrayDark);
-                    Element botElem = text(bot) | color(toColor(t.color));
-                    if (isCursor) botElem = botElem | bold;
-                    topRow.push_back(topElem);
-                    botRow.push_back(botElem);
-                }
-                rows.push_back(hbox(topRow));
-                rows.push_back(hbox(botRow));
-            }
-            return vbox({
-                text("BUILD VIEW  cursor: (" + to_string(cx) + "," + to_string(cy) + ")") | bold | color(Color::Cyan),
-                separator(),
-                vbox(rows),
-                }) | border | size(WIDTH, GREATER_THAN, 40);
-            });
-
-        // 信息面板（右侧：模式 + 当前格信息 + 库存 + 操作提示）
-        infoBox = Renderer([&] {
-            const Tile& t = gameMap.getTile(cx, cy);
-            string tileDesc = "Tile (" + to_string(cx) + "," + to_string(cy) + "): " + t.name;
-            string layerInfo = "Layers: pipe=" + string(t.pipe ? "Y" : "-") + " wire=" + string(t.wire ? "Y" : "-");
-            string cost = (selectedMode == 2) ? "Cost: 5 steel" :
-                (selectedMode == 3) ? "Cost: 3 steel" : "Cost: free";
-            int steel = player.getItemCount("steel");
-            int water = player.getItemCount("water");
-            int coal = player.getItemCount("coal");
-            return vbox({
-                text("MODE") | bold | color(Color::Yellow),
-                modeList->Render(),
-                separator(),
-                text(tileDesc),
-                text(layerInfo) | color(Color::GrayDark),
-                separator(),
-                hbox({ text("Steel: "), text(to_string(steel)) | color(Color::Cyan) }),
-                hbox({ text("Water: "), text(to_string(water)) | color(Color::Blue) }),
-                hbox({ text("Coal:  "), text(to_string(coal)) | color(Color::Yellow) }),
-                text(cost) | color(Color::Green),
-                separator(),
-                text("Controls:") | bold,
-                text("Arrows  - move cursor"),
-                text("1-6     - select mode"),
-                text("Enter   - place / open generator"),
-                text("Q       - close"),
-                });
-            });
-
-        auto showMap = [this] { return panelMode == MapPanel; };
-        auto showGen = [this] { return panelMode == GeneratorPanel; };
-
-        // 布局：MapPanel 仅 modeList 可聚焦（方向键被外层 CatchEvent 拦截，故只做显示）；
-        // GeneratorPanel 切到三按钮，TakeFocus 保证焦点平滑切换。
-        auto layout = Container::Vertical({
-            Maybe(modeList, showMap),
-            Maybe(buttonAddWater, showGen),
-            Maybe(buttonAddCoal, showGen),
-            Maybe(buttonGenClose, showGen),
-            });
-
-        mainContainer = Renderer(layout, [&] {
-            if (panelMode == GeneratorPanel) {
-                Generator* g = powerNet.generatorAt(genX, genY);
-                if (!g) {
-                    panelMode = MapPanel;  // 发电机被拆，回主视图
-                }
-                else {
-                    int wLvl = g->waterLevel, cLvl = g->coalLevel;
-                    int power = (wLvl > 0 && cLvl > 0) ? g->maxOutput : 0;
-                    bool hasWater = powerNet.hasWater(genX, genY);
-                    auto makeBar = [](const string& label, int val, int maxV, Color c) {
-                        int filled = (val * 20) / maxV;
-                        string bar = "[";
-                        for (int i = 0; i < 20; ++i) bar += (i < filled) ? '#' : '.';
-                        bar += "]";
-                        return hbox({ text(label + " "), text(bar) | color(c), text(" " + to_string(val) + "%") });
-                        };
-                    return vbox({
-                        text("GENERATOR AT (" + to_string(genX) + "," + to_string(genY) + ")") | bold | color(Color::Yellow),
-                        separator(),
-                        makeBar("WATER", wLvl, 100, Color::Blue),
-                        makeBar("COAL ", cLvl, 100, Color::Yellow),
-                        makeBar("POWER", power, 100, Color::Green),
-                        separator(),
-                        hbox({ text("Water supply: "),
-                              text(hasWater ? "CONNECTED" : "NO WATER") | color(hasWater ? Color::Green : Color::Red) }),
-                        separator(),
-                        hbox({ buttonAddWater->Render() | flex, buttonAddCoal->Render() | flex, buttonGenClose->Render() | flex }),
-                        text(statusMessage) | color(Color::Yellow),
-                        text("Tip: needs water+coal>0 to generate. Place pump near ~ and pipe to here.") | color(Color::GrayDark),
-                        }) | border | size(WIDTH, GREATER_THAN, 64);
-                }
-            }
-            // MapPanel 主视图
-            return vbox({
-                text("        BUILD  //  PLACE MACHINES & UTILITIES") | bold | color(Color::Yellow),
-                separator(),
-                hbox({ mapRenderer->Render() | flex, infoBox->Render() }),
-                separator(),
-                text(statusMessage) | color(Color::Yellow),
-                }) | border | size(WIDTH, GREATER_THAN, 78);
-            });
-
-        // 事件路由：Event::Custom 推进 tick；MapPanel 拦方向键/数字键/Enter；
-        // GeneratorPanel 放行给按钮（仅 Q/Esc 回主视图）。
-        mainContainer |= CatchEvent([&](Event event) {
-            if (event == Event::Custom) {
-                powerNet.tick(player, 100);
+        // ESC 直接关闭交易界面（和 BuildUI 一致）
+        mainContainer = mainContainer | CatchEvent([&](Event e) {
+            if (e == Event::Escape) {
+                running = false;
+                screen.ExitLoopClosure()();
                 return true;
             }
-            if (panelMode == GeneratorPanel) {
-                if (event == Event::Character("q") || event == Event::Character("Q") || event == Event::Escape) {
-                    panelMode = MapPanel;
-                    statusMessage = "Returned to build view.";
-                    return true;
-                }
-                return false;  // 放行给按钮（Tab/Enter）
-            }
-            // MapPanel
-            if (event == Event::ArrowUp) { cy = max(0, cy - 1); statusMessage = "Cursor: (" + to_string(cx) + "," + to_string(cy) + ")"; return true; }
-            if (event == Event::ArrowDown) { cy = min(gameMap.getHeight() - 1, cy + 1); statusMessage = "Cursor: (" + to_string(cx) + "," + to_string(cy) + ")"; return true; }
-            if (event == Event::ArrowLeft) { cx = max(0, cx - 1); statusMessage = "Cursor: (" + to_string(cx) + "," + to_string(cy) + ")"; return true; }
-            if (event == Event::ArrowRight) { cx = min(gameMap.getWidth() - 1, cx + 1); statusMessage = "Cursor: (" + to_string(cx) + "," + to_string(cy) + ")"; return true; }
-            if (event == Event::Character("1")) { selectedMode = 0; statusMessage = "Mode: Pipe"; return true; }
-            if (event == Event::Character("2")) { selectedMode = 1; statusMessage = "Mode: Wire"; return true; }
-            if (event == Event::Character("3")) { selectedMode = 2; statusMessage = "Mode: Generator"; return true; }
-            if (event == Event::Character("4")) { selectedMode = 3; statusMessage = "Mode: Pump"; return true; }
-            if (event == Event::Character("5")) { selectedMode = 4; statusMessage = "Mode: Remove"; return true; }
-            if (event == Event::Character("6")) { selectedMode = 5; statusMessage = "Mode: Exit"; return true; }
-            if (event == Event::Return || event == Event::Character(" ")) { placeAt(cx, cy); return true; }
-            if (event == Event::Character("q") || event == Event::Character("Q") || event == Event::Escape) {
-                running = false; screen.ExitLoopClosure()(); return true;
-            }
             return false;
-            });
+        });
     }
 
     Component getComponent() { return mainContainer; }
@@ -2050,13 +1831,29 @@ private:
     GameMap gameMap;
     BlastFurnace furnace;
     Lathe lathe;
-    PowerNetwork powerNet;
     Area currentArea = Area::Home;
     bool running = true;
     int activeSaveSlot = 1;
     string message = "Welcome to Chemical World! WASD to move, E to interact, F to open furnace";
     bool tutorialActive = true;
     int tutorialStep = 0;
+
+    // ============== 电力与建造 ==============
+    static const int EU_MAX = 10000;
+    int globalEU = 0;
+    bool gen_blueprint_unlocked = false;
+    bool wire_blueprint_unlocked = false;
+    vector<MachineMeta> machineMeta;
+    map<pair<int, int>, PowerGenerator> generators;
+    set<pair<int, int>> poweredMachines;
+
+    bool powerDraw(int eu, pair<int, int> machineXY) {
+        if (currentArea != Area::Home) return false;
+        if (!poweredMachines.count(machineXY)) return false;
+        if (globalEU < eu) return false;
+        globalEU -= eu;
+        return true;
+    }
 
     struct TutorialStep {
         string title;
@@ -2093,7 +1890,30 @@ private:
         for (const auto& tutorial : tutorials) output << (tutorial.completed ? 1 : 0) << ' ';
         output << '\n';
         gameMap.save(output);
-        powerNet.save(output);
+
+        // === v3 追加段 ===
+        int tmp = 0;
+        tmp = gen_blueprint_unlocked ? 1 : 0;   output << tmp << ' ';
+        tmp = wire_blueprint_unlocked ? 1 : 0;  output << tmp << '\n';
+        output << globalEU << '\n';
+
+        // 把 generators 燃烧数据同步进 machineMeta 再统一保存
+        for (auto& m : machineMeta) {
+            if (m.type == 'G') {
+                auto it = generators.find({ m.x, m.y });
+                if (it != generators.end()) {
+                    m.remainingBurnEU = it->second.burnEU;
+                    m.loadedCoal = it->second.loadedCoal;
+                    m.active = it->second.active;
+                }
+            }
+        }
+        output << machineMeta.size() << '\n';
+        for (const auto& m : machineMeta) {
+            tmp = m.active ? 1 : 0;
+            output << m.x << ' ' << m.y << ' ' << m.type << ' '
+                << m.remainingBurnEU << ' ' << m.loadedCoal << ' ' << tmp << '\n';
+        }
         return output.good();
     }
 
@@ -2101,7 +1921,8 @@ private:
         ifstream input(savePath(slot));
         string header;
         int version = 0;
-        if (!input || !(input >> header >> version) || header != "CHEMICAL_WORLD_SAVE" || (version != 2 && version != 3)) return false;
+        if (!input || !(input >> header >> version) || header != "CHEMICAL_WORLD_SAVE" ||
+            (version != 2 && version != 3)) return false;
         if (!(input >> player.name >> player.level >> player.coins >> player.exp >> player.x >> player.y)) return false;
         int savedArea = 0;
         if (!(input >> savedArea) || savedArea < 0 || savedArea > 2) return false;
@@ -2123,14 +1944,50 @@ private:
         }
         tutorialActive = false;
         for (const auto& tutorial : tutorials) if (!tutorial.completed) tutorialActive = true;
-        lathe = Lathe{};  // 读档后清空车床运行态（运行态不持久化，与高炉一致）
-        bool ok = gameMap.load(input, version);
-        powerNet.bind(gameMap);
-        powerNet.load(input, version);
-        furnace.setPowerNet(&powerNet, 5, 5);
-        lathe.setPowerNet(&powerNet, 5, 8);
-        powerNet.recompute();
-        return ok;
+        if (!gameMap.load(input)) return false;
+
+        // === v2/v3 新字段 ===
+        gen_blueprint_unlocked = false;
+        wire_blueprint_unlocked = false;
+        globalEU = 0;
+        machineMeta.clear();
+        generators.clear();
+        poweredMachines.clear();
+        furnace = BlastFurnace{};
+        lathe = Lathe{};
+
+        // 先从当前地图扫描默认的 F/L 机器 meta（v2 没有 meta 段时这就是唯一来源）
+        for (int y = 0; y < gameMap.getHeight(); ++y) {
+            for (int x = 0; x < gameMap.getWidth(); ++x) {
+                char d = gameMap.getTileDisplay(x, y);
+                if (d == 'F' || d == 'L') {
+                    machineMeta.push_back({ x, y, d, 0, 0, false });
+                }
+            }
+        }
+        if (version == 3) {
+            int tmp = 0;
+            if (!(input >> tmp)) return false; gen_blueprint_unlocked = !!tmp;
+            if (!(input >> tmp)) return false; wire_blueprint_unlocked = !!tmp;
+            if (!(input >> globalEU)) return false;
+            size_t metaCount = 0;
+            if (!(input >> metaCount)) return false;
+            machineMeta.clear();  // v3 的 meta 覆盖上面的扫描默认
+            for (size_t i = 0; i < metaCount; ++i) {
+                MachineMeta m;
+                if (!(input >> m.x >> m.y >> m.type >> m.remainingBurnEU >> m.loadedCoal >> tmp)) return false;
+                m.active = !!tmp;
+                machineMeta.push_back(m);
+                if (m.type == 'G') {
+                    PowerGenerator g;
+                    g.burnEU = m.remainingBurnEU;
+                    g.loadedCoal = m.loadedCoal;
+                    g.active = m.active;
+                    generators[{m.x, m.y}] = g;
+                }
+            }
+        }
+        return true;
     }
 
     void newGame() {
@@ -2140,19 +1997,23 @@ private:
         lathe = Lathe{};
         currentArea = Area::Home;
         gameMap.generate(currentArea);
-        player.x = 8;
+        player.x = 10;   // 玩家出生 (10,5)，避开车床 L 2×2 (8,5)-(9,6)
         player.y = 5;
         player.name = "Chemist";
         player.addItem("water", 5, "basic", 3);
-        player.addItem("coal", 3, "fuel", 8);
+        player.addItem("coal", 5, "fuel", 8);
         player.addItem("sand", 3, "material", 2);
-        powerNet.clear();
-        powerNet.bind(gameMap);
-        furnace.setPowerNet(&powerNet, 5, 5);
-        lathe.setPowerNet(&powerNet, 5, 8);
-        powerNet.recompute();
         for (auto& tutorial : tutorials) tutorial.completed = false;
         tutorialActive = true;
+        // 电力与建造默认状态
+        globalEU = 0;
+        gen_blueprint_unlocked = false;
+        wire_blueprint_unlocked = false;
+        generators.clear();
+        poweredMachines.clear();
+        machineMeta.clear();
+        machineMeta.push_back({ 5, 5, 'F', 0, 0, false });   // BlastFurnace 左上 (5,5)
+        machineMeta.push_back({ 8, 5, 'L', 0, 0, false });   // Lathe 左上 (8,5)
         message = "Welcome to Chemical World!";
     }
 
@@ -2384,7 +2245,7 @@ private:
         SetConsoleCursorInfo(hConsole, &cursorInfo);
 
         auto screen = ScreenInteractive::Fullscreen();
-        TradeUI tradeUI(player, screen);
+        TradeUI tradeUI(player, screen, gen_blueprint_unlocked, wire_blueprint_unlocked);
         screen.Loop(tradeUI.getComponent());
 
         cursorInfo.bVisible = true;
@@ -2428,12 +2289,6 @@ private:
         }
         currentArea = destination;
         gameMap.generate(currentArea);
-        // 旅行重生成地图会清掉玩家建造的管道/发电机；重新绑定网络并重算
-        powerNet.clear();
-        powerNet.bind(gameMap);
-        furnace.setPowerNet(&powerNet, 5, 5);
-        lathe.setPowerNet(&powerNet, 5, 8);
-        powerNet.recompute();
         if (destination == Area::Wasteland) {
             player.x = 4; player.y = 2;
             message = "Welcome to the wasteland. Find a cave entrance marked O.";
@@ -2446,7 +2301,6 @@ private:
 
     // 打开高炉UI（使用FTXUI）
     void openFurnaceUI() {
-        powerNet.recompute();  // 保证通电状态最新
         // 隐藏光标
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
         CONSOLE_CURSOR_INFO cursorInfo;
@@ -2461,6 +2315,7 @@ private:
         thread furnaceTicker([&]() {
             while (furnaceUI.isRunning()) {
                 this_thread::sleep_for(chrono::milliseconds(100));
+                globalTick100ms();
                 if (furnaceUI.isRunning()) {
                     screen.PostEvent(Event::Custom);
                 }
@@ -2485,7 +2340,6 @@ private:
 
     // 打开车床 UI（镜像 openFurnaceUI：隐光标→Fullscreen→ticker 线程→Loop→join→恢复光标）
     void openLatheUI() {
-        powerNet.recompute();  // 保证通电状态最新
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
         CONSOLE_CURSOR_INFO cursorInfo;
         GetConsoleCursorInfo(hConsole, &cursorInfo);
@@ -2498,6 +2352,7 @@ private:
         thread latheTicker([&]() {
             while (latheUI.isRunning()) {
                 this_thread::sleep_for(chrono::milliseconds(100));
+                globalTick100ms();
                 if (latheUI.isRunning()) {
                     screen.PostEvent(Event::Custom);
                 }
@@ -2515,43 +2370,6 @@ private:
 
         // 不调 checkTutorialProgress：避免新增教程步破坏旧存档（tutorialCount 守卫）
         message = "& Lathe operation complete!";
-        cls();
-    }
-
-    // 打开建造 UI（B 键：子图缩放放置机器/管道/电线 + 发电机面板）
-    // 镜像 openFurnaceUI/openLatheUI：隐光标→Fullscreen→ticker 线程 100ms PostEvent→Loop→join→复光标→cls。
-    // ticker 同时推进 powerNet.tick（发电机耗煤/水），符合「仅 UI 打开时 tick」的首版约定。
-    void openBuildUI() {
-        powerNet.recompute();  // 进 UI 前重算一次，通电状态最新
-        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-        CONSOLE_CURSOR_INFO cursorInfo;
-        GetConsoleCursorInfo(hConsole, &cursorInfo);
-        cursorInfo.bVisible = false;
-        SetConsoleCursorInfo(hConsole, &cursorInfo);
-
-        auto screen = ScreenInteractive::Fullscreen();
-        BuildUI buildUI(gameMap, powerNet, player, screen, player.x, player.y);
-
-        thread buildTicker([&]() {
-            while (buildUI.isRunning()) {
-                this_thread::sleep_for(chrono::milliseconds(100));
-                if (buildUI.isRunning()) {
-                    screen.PostEvent(Event::Custom);
-                }
-            }
-            });
-
-        screen.Loop(buildUI.getComponent());
-
-        if (buildTicker.joinable()) {
-            buildTicker.join();
-        }
-
-        cursorInfo.bVisible = true;
-        SetConsoleCursorInfo(hConsole, &cursorInfo);
-
-        powerNet.recompute();  // 退出后再重算，主图门控状态最新
-        message = "& Build session ended.";
         cls();
     }
 
@@ -2606,7 +2424,7 @@ private:
         setcolor(COLOR_BLUE);
         cout << "~=Salt ~  ";
         cout << "=Rock ";
-        if (currentArea == Area::Home) cout << "F=Furnace L=Lathe C=Car ~=Water G=Gen K=Pump B=Build ";
+        if (currentArea == Area::Home) cout << "F=Furnace L=Lathe C=Car a=Animal ";
         else cout << "O=Cave entrance ";
         setcolor(COLOR_DARK_RED);
         cout << "H=Hematite M=Magnetite B=Bauxite ";
@@ -2680,10 +2498,9 @@ private:
         cout << "  C     - Crafting menu\n";
         cout << "  T     - Trading market\n";
         cout << "  F     - Hint only; use E beside furnace at home\n";
-        cout << "  B     - Build menu (home only): place generator/pump/pipes/wires\n";
         cout << "  H     - Show help\n";
-        cout << "  F5    - Save to active manual slot\n";
-        cout << "  F9    - Load active manual slot\n";
+        cout << "  P     - Save to active manual slot\n";
+        cout << "  L     - Load active manual slot\n";
         cout << "  Q     - Quit game\n";
         setcolor(COLOR_RESET);
     }
@@ -2695,6 +2512,10 @@ private:
         case 'w': case 'W': newY--; break;
         case 's': case 'S': newY++; break;
         case 'a': case 'A': newX--; break;
+        case 'b': case 'B':
+            if (currentArea == Area::Home) openBuildUI();
+            else message = "Can only build at home.";
+            return;
         case 'd': case 'D': newX++; break;
         case 'e': case 'E':
             if (currentArea == Area::Home && gameMap.isNear(5, 5, 'F', player.x, player.y)) {
@@ -2727,6 +2548,14 @@ private:
                 message = "You climbed out of the cave.";
                 return;
             }
+            // Generator interaction (isNear any installed G anchor)
+            {
+                pair<int, int> gpos;
+                if (currentArea == Area::Home && findNearbyGenerator(player.x, player.y, gpos)) {
+                    openGeneratorPanel(gpos.first, gpos.second);
+                    return;
+                }
+            }
             for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) {
                 if (abs(dx) + abs(dy) == 1 && gameMap.getTile(player.x + dx, player.y + dy).mineral != "") {
                     if (gameMap.mineAt(player, player.x + dx, player.y + dy)) {
@@ -2747,10 +2576,6 @@ private:
         case 'f': case 'F':
             message = "Find the furnace at home and press E beside it.";
             return;
-        case 'b': case 'B':
-            if (currentArea == Area::Home) openBuildUI();
-            else message = "Build only at home.";
-            return;
         case 'h': case 'H':
             cls();
             showHelp();
@@ -2761,11 +2586,11 @@ private:
             saveGame(0);
             running = false;
             return;
-        case 1005:
+        case 'P':case 'p' :
             if (saveGame(activeSaveSlot)) message = "Game saved to Manual Slot " + to_string(activeSaveSlot) + ".";
             else message = "X Could not save the game.";
             return;
-        case 1009:
+		case 'L':case 'l' :
             if (loadGame(activeSaveSlot)) message = "Game loaded from Manual Slot " + to_string(activeSaveSlot) + ".";
             else message = "X No valid save in Manual Slot " + to_string(activeSaveSlot) + ".";
             return;
@@ -2784,7 +2609,448 @@ private:
         }
     }
 
+    // ===== 电力与建造（任务 2 实现）=====
+
+    // BFS 计算电网连通性 + 驱动所有发电机燃烧 EU 注入 globalEU；把连通集合缓存进 poweredMachines
+    void tickPowerGrid() {
+        poweredMachines.clear();
+        if (currentArea != Area::Home) return;
+        const int W = gameMap.getWidth();
+        const int H = gameMap.getHeight();
+
+        // 1) 初始化 BFS 队列：把所有发电机 'G' 主格（keys of generators）入队
+        set<pair<int, int>> visited;
+        vector<pair<int, int>> queue;
+        for (auto& kv : generators) {
+            int gx = kv.first.first, gy = kv.first.second;
+            // 2×2 G/g 块四格都作为 BFS 入队起点，都记为"机器位置"
+            for (int dy = 0; dy < 2; ++dy) for (int dx = 0; dx < 2; ++dx) {
+                int x = gx + dx, y = gy + dy;
+                if (x >= 0 && x < W && y >= 0 && y < H) {
+                    if (visited.insert({ x,y }).second) queue.push_back({ x,y });
+                }
+            }
+            // 机器主坐标计入 poweredMachines（后续 powerDraw 查询用）
+            poweredMachines.insert(kv.first);
+        }
+
+        // 2) 同时把 F/L 机器 2×2 四格作为"潜在电网扩展点"——即使没电，它们和电线相邻也要扩展
+        for (auto& m : machineMeta) {
+            if (m.type == 'F' || m.type == 'L' || m.type == 'G') {
+                for (int dy = 0; dy < 2; ++dy) for (int dx = 0; dx < 2; ++dx) {
+                    int x = m.x + dx, y = m.y + dy;
+                    if (x >= 0 && x < W && y >= 0 && y < H) {
+                        // 只标记 visited（若旁边有发电机/电线，就会连上）
+                    }
+                }
+            }
+        }
+
+        // 3) 标准 BFS，沿 '+' 电线 4 邻扩展；另外遇到机器格（大写/小写字母辅格）也扩展
+        auto isConductive = [&](int x, int y) -> bool {
+            if (x < 0 || x >= W || y < 0 || y >= H) return false;
+            char d = gameMap.getTileDisplay(x, y);
+            if (d == '+') return true;
+            if (d == 'F' || d == 'f' || d == 'L' || d == 'l' || d == 'G' || d == 'g') return true;
+            return false;
+        };
+
+        // 把所有机器四格先入 visited，便于扩展时不会漏
+        auto seedMachineCells = [&]() {
+            for (auto& m : machineMeta) {
+                if (m.type == 'F' || m.type == 'L' || m.type == 'G') {
+                    for (int dy = 0; dy < 2; ++dy) for (int dx = 0; dx < 2; ++dx) {
+                        int x = m.x + dx, y = m.y + dy;
+                        if (x >= 0 && x < W && y >= 0 && y < H) visited.insert({ x,y });
+                    }
+                }
+            }
+        };
+        seedMachineCells();
+
+        static const int DX[4] = { 1,-1,0,0 };
+        static const int DY[4] = { 0,0,1,-1 };
+        size_t head = 0;
+        while (head < queue.size()) {
+            auto [cx, cy] = queue[head++];
+            for (int d = 0; d < 4; ++d) {
+                int nx = cx + DX[d], ny = cy + DY[d];
+                if (!isConductive(nx, ny)) continue;
+                if (!visited.insert({ nx,ny }).second) continue;
+                queue.push_back({ nx,ny });
+            }
+        }
+
+        // 4) 对于每个 F/L 机器，如果它的 4 格中有任何 1 格被 BFS visit 过，则认为通电
+        for (auto& m : machineMeta) {
+            if (m.type == 'F' || m.type == 'L' || m.type == 'G') {
+                for (int dy = 0; dy < 2; ++dy) for (int dx = 0; dx < 2; ++dx) {
+                    if (visited.count({ m.x + dx, m.y + dy })) {
+                        poweredMachines.insert({ m.x, m.y });
+                        goto next_machine;
+                    }
+                }
+            }
+        next_machine:;
+        }
+
+        // 5) 驱动所有发电机燃烧 + 注入 EU
+        for (auto& kv : generators) {
+            // 只有在 poweredMachines 里的发电机才真正燃烧（否则白烧煤——GTNH 里是无论连不连都烧，但这里简化为：连通才燃烧）
+            bool connected = poweredMachines.count(kv.first);
+            auto [inject, burning] = kv.second.updateTick();
+            if (connected && burning) {
+                globalEU = min(EU_MAX, globalEU + inject);
+            }
+        }
+    }
+
+    // 放置发电机（2×2）；返回 true 成功
+    bool placeGenerator(int x, int y) {
+        if (currentArea != Area::Home) return false;
+        if (!gen_blueprint_unlocked) return false;
+        if (player.coins < 100) return false;
+        const int W = gameMap.getWidth(), H = gameMap.getHeight();
+        if (x < 0 || x + 1 >= W || y < 0 || y + 1 >= H) return false;
+        for (int dy = 0; dy < 2; ++dy) for (int dx = 0; dx < 2; ++dx) {
+            if (gameMap.getTile(x + dx, y + dy).display != '.') return false;
+        }
+        player.coins -= 100;
+        gameMap.getTile(x, y) = { 'G', "Power Generator", "Burns coal to make power", false, COLOR_RED };
+        gameMap.getTile(x, y + 1) = { 'g', "Power Generator", "", false, COLOR_DARK_RED };
+        gameMap.getTile(x + 1, y) = { 'g', "Power Generator", "", false, COLOR_DARK_RED };
+        gameMap.getTile(x + 1, y + 1) = { 'g', "Power Generator", "", false, COLOR_DARK_RED };
+        generators[{x, y}] = PowerGenerator{};
+        machineMeta.push_back({ x, y, 'G', 0, 0, false });
+        return true;
+    }
+
+    bool placeWire(int x, int y) {
+        if (currentArea != Area::Home) return false;
+        if (!wire_blueprint_unlocked) return false;
+        if (player.coins < 5) return false;
+        const int W = gameMap.getWidth(), H = gameMap.getHeight();
+        if (x < 0 || x >= W || y < 0 || y >= H) return false;
+        if (gameMap.getTile(x, y).display != '.') return false;
+        player.coins -= 5;
+        gameMap.getTile(x, y) = { '+', "Wire", "Conducts power", false, COLOR_BLUE };
+        return true;
+    }
+
+    bool placeDecor(int x, int y, char display) {
+        if (currentArea != Area::Home) return false;
+        if (player.coins < 1) return false;
+        const int W = gameMap.getWidth(), H = gameMap.getHeight();
+        if (x < 0 || x >= W || y < 0 || y >= H) return false;
+        if (gameMap.getTile(x, y).display != '.') return false;
+        player.coins -= 1;
+        int c = (display == '*') ? (rand() % 3 == 0 ? COLOR_YELLOW : (rand() % 2 ? COLOR_PURPLE : COLOR_GREEN))
+                                : COLOR_DARK_GREEN;
+        gameMap.getTile(x, y) = { display, display == '*' ? "Flower" : "Grass", "Decoration", true, c };
+        return true;
+    }
+
+    // 找玩家邻近的发电机（按 machineMeta 查 type=='G'，并用左上格 isNear）
+    bool findNearbyGenerator(int px, int py, pair<int, int>& outPos) const {
+        if (currentArea != Area::Home) return false;
+        for (auto& m : machineMeta) {
+            if (m.type != 'G') continue;
+            if (gameMap.isNear(m.x, m.y, 'G', px, py)) {
+                outPos = { m.x, m.y };
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // 由全屏 UI 的 100ms ticker 统一调用：推进电网+高炉+车床
+    void globalTick100ms() {
+        tickPowerGrid();
+        furnace.update(player, 100);
+        // Lathe：先扣 2 EU 并把结果写进 hasPowerThisTick 字段，
+        // 内部 update() 会根据它推进进度或显示 paused。
+        bool machining = (lathe.getAnimState() == Lathe::Machining ||
+                          lathe.getAnimState() == Lathe::Inserting);
+        lathe.hasPowerThisTick = machining ? powerDraw(2, {8, 5}) : true;
+        lathe.update(player, 100);
+    }
+
 public:
+    // ===== public getters for UI =====
+    int getGlobalEU() const { return globalEU; }
+    int countBurningGenerators() const {
+        int cnt = 0;
+        for (auto& kv : generators) if (kv.second.isActive()) cnt++;
+        return cnt;
+    }
+    int getTotalGenerators() const { return (int)generators.size(); }
+
+    // ===== BuildUI：B 键打开，7×7 zoom grid + Radiobox 放置列表 =====
+    void openBuildUI() {
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        CONSOLE_CURSOR_INFO cursorInfo;
+        GetConsoleCursorInfo(hConsole, &cursorInfo);
+        cursorInfo.bVisible = false;
+        SetConsoleCursorInfo(hConsole, &cursorInfo);
+
+        auto screen = ScreenInteractive::Fullscreen();
+        string statusMsg = "Select a placeable on the left, then press PLACE to install it at your feet (center of grid).";
+        Component placeMenu;
+        Component buttonPlace;
+        Component buttonClose;
+        Component mainContainer;
+        int placeSelection = 0;
+        vector<string> placeEntries;
+
+        auto rebuildPlaceEntries = [&]() {
+            placeEntries.clear();
+            placeEntries.push_back(string("  Generator (2x2, 100c)")
+                + (gen_blueprint_unlocked ? "" : "  [LOCKED: buy BP first]"));
+            placeEntries.push_back(string("  Wire (1x1, 5c)")
+                + (wire_blueprint_unlocked ? "" : "  [LOCKED: buy BP first]"));
+            placeEntries.push_back("  Flower (1c)");
+            placeEntries.push_back("  Grass tuft (1c)");
+            if (placeSelection >= (int)placeEntries.size()) placeSelection = (int)placeEntries.size() - 1;
+            if (placeSelection < 0) placeSelection = 0;
+        };
+        rebuildPlaceEntries();
+        placeMenu = Menu(&placeEntries, &placeSelection);
+
+        auto tryPlace = [&]() {
+            int px = player.x;
+            int py = player.y;
+            switch (placeSelection) {
+            case 0:
+                if (!gen_blueprint_unlocked) { statusMsg = "Generator blueprint required. Buy it from Trade > BUY."; return; }
+                if (player.coins < 100) { statusMsg = "Need 100 coins."; return; }
+                if (placeGenerator(px, py)) {
+                    statusMsg = "Generator installed at (" + to_string(px) + "," + to_string(py) + ").";
+                    rebuildPlaceEntries();
+                } else { statusMsg = "Space is already occupied or impassable."; }
+                break;
+            case 1:
+                if (!wire_blueprint_unlocked) { statusMsg = "Wire blueprint required. Buy it from Trade > BUY."; return; }
+                if (player.coins < 5) { statusMsg = "Need 5 coins."; return; }
+                if (placeWire(px, py)) {
+                    statusMsg = "Wire laid at (" + to_string(px) + "," + to_string(py) + ").";
+                    rebuildPlaceEntries();
+                } else { statusMsg = "Cannot lay wire here."; }
+                break;
+            case 2:
+                if (player.coins < 1) { statusMsg = "Need 1 coin."; return; }
+                if (placeDecor(px, py, '*')) {
+                    statusMsg = "Planted a flower at (" + to_string(px) + "," + to_string(py) + ").";
+                } else { statusMsg = "Blocked."; }
+                break;
+            case 3:
+                if (player.coins < 1) { statusMsg = "Need 1 coin."; return; }
+                if (placeDecor(px, py, 'v')) {
+                    statusMsg = "Planted grass tuft at (" + to_string(px) + "," + to_string(py) + ").";
+                } else { statusMsg = "Blocked."; }
+                break;
+            }
+        };
+
+        buttonPlace = Button("PLACE", [&] { tryPlace(); });
+        buttonClose = Button("CLOSE", [&] { screen.ExitLoopClosure()(); });
+
+        auto gridRenderer = Renderer([&] {
+            int cx = player.x, cy = player.y;
+            Elements rows;
+            for (int dy = -3; dy <= 3; ++dy) {
+                Elements rowCells;
+                for (int dx = -3; dx <= 3; ++dx) {
+                    int x = cx + dx;
+                    int y = cy + dy;
+                    char d = gameMap.getTileDisplay(x, y);
+                    Color col = Color::GrayDark;
+                    bool isCenter = (dx == 0 && dy == 0);
+                    if (d == '.' || d == '#') col = Color::GreenLight;
+                    else if (d == '~') col = Color::BlueLight;
+                    else if (d == '*') col = Color::MagentaLight;
+                    else if (d == 'v') col = Color::Green;
+                    else if (d == 't') col = Color::Green;
+                    else if (d == '+' || d == 'G' || d == 'g') col = Color::YellowLight;
+                    else if (d == 'F' || d == 'f') col = Color::RedLight;
+                    else if (d == 'L' || d == 'l') col = Color::Magenta;
+                    else if (d == 'C') col = Color::Yellow;
+                    else col = Color::White;
+                    auto cell = text(string(1, d == '#' ? ' ' : d)) | color(col) | center;
+                    cell = cell | size(WIDTH, EQUAL, 3) | size(HEIGHT, EQUAL, 1);
+                    cell = cell | borderStyled(isCenter ? BorderStyle::DOUBLE : BorderStyle::LIGHT);
+                    rowCells.push_back(cell);
+                }
+                rows.push_back(hbox(std::move(rowCells)));
+            }
+            auto title = text("  BUILD VIEW  7x7  (center = player feet)") | bold | color(Color::Cyan);
+            auto gridBox = vbox(std::move(rows)) | borderDouble | center;
+            return vbox({ separator(), title, separator(), gridBox }) | center;
+        });
+
+        auto infoRenderer = Renderer([&] {
+            return vbox({
+                hbox({ text(" Coins: ") | bold,
+                        text(to_string(player.coins) + "c") | color(Color::Yellow) }),
+                hbox({ text(" EU Pool: ") | bold,
+                        text(to_string(globalEU) + " / 10000") | color(Color::Cyan) }),
+                separator(),
+                text(" Blueprints:") | bold,
+                text("   Generator BP: " + string(gen_blueprint_unlocked ? "OWNED" : "LOCKED [150c]"))
+                    | color(gen_blueprint_unlocked ? Color::Green : Color::Red),
+                text("   Wire BP:      " + string(wire_blueprint_unlocked ? "OWNED" : "LOCKED [50c]"))
+                    | color(wire_blueprint_unlocked ? Color::Green : Color::Red),
+            }) | border;
+        });
+
+        auto buttonsBox = Container::Vertical({ buttonPlace, buttonClose });
+        auto layout = Container::Vertical({ placeMenu, buttonPlace, buttonClose });
+        mainContainer = Renderer(layout, [&, gridRenderer, infoRenderer, buttonsBox] {
+            return vbox({
+                text("            # BUILD MODE [B] #") | bold | color(Color::Yellow),
+                separator(),
+                hbox({
+                    vbox({
+                        text(" PLACEABLES") | bold | color(Color::Cyan),
+                        separator(),
+                        placeMenu->Render() | flex,
+                    }) | size(WIDTH, GREATER_THAN, 42) | flex,
+                    vbox({
+                        infoRenderer->Render(),
+                    }) | size(WIDTH, EQUAL, 34),
+                }),
+                separator(),
+                gridRenderer->Render() | center,
+                separator(),
+                hbox({
+                    filler(),
+                    buttonsBox->Render() | size(WIDTH, EQUAL, 18),
+                    filler(),
+                }),
+                separator(),
+                text(statusMsg) | color(Color::Green),
+                text("Tip: LEFT item pick type; PLACE puts it at the center (player). Decorations 1 coin each.")
+                    | color(Color::GrayDark),
+            }) | border | size(WIDTH, GREATER_THAN, 88);
+        });
+
+        // 加入 100ms ticker 以刷新 EU / 全局状态；ESC 直接退出 BuildUI
+        atomic<bool> uiRunning{ true };
+        mainContainer = mainContainer | CatchEvent([&](Event e) {
+            if (e == Event::Custom) { globalTick100ms(); return true; }
+            if (e == Event::Escape) {
+                uiRunning.store(false);
+                screen.ExitLoopClosure()();
+                return true;
+            }
+            return false;
+        });
+        thread ticker([&screen, &uiRunning]() {
+            while (uiRunning.load()) {
+                this_thread::sleep_for(chrono::milliseconds(100));
+                if (!uiRunning.load()) break;
+                try { screen.PostEvent(Event::Custom); } catch (...) { break; }
+            }
+        });
+
+        screen.Loop(mainContainer);
+        uiRunning.store(false);
+        if (ticker.joinable()) ticker.join();
+
+        cursorInfo.bVisible = true;
+        SetConsoleCursorInfo(hConsole, &cursorInfo);
+        message = "& Build mode closed.";
+        cls();
+    }
+
+    // ===== GeneratorPanel：E beside Generator 打开面板，投煤 / 看剩余 =====
+    void openGeneratorPanel(int gx, int gy) {
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        CONSOLE_CURSOR_INFO cursorInfo;
+        GetConsoleCursorInfo(hConsole, &cursorInfo);
+        cursorInfo.bVisible = false;
+        SetConsoleCursorInfo(hConsole, &cursorInfo);
+
+        auto screen = ScreenInteractive::Fullscreen();
+        string statusMsg = "Power Generator panel. Feed coal to keep the EU grid alive.";
+
+        // 构造局部引用
+        auto it = generators.find({ gx, gy });
+        // 如果没找到，先创建一个空 PowerGenerator（避免 crash）
+        if (it == generators.end()) {
+            generators.insert({ {gx, gy}, PowerGenerator() });
+            it = generators.find({ gx, gy });
+        }
+        PowerGenerator& genRef = it->second;
+        Component buttonFeed = Button("ADD 1 COAL", [&] {
+            if (genRef.feedCoal(player)) statusMsg = "+1 coal loaded into generator.";
+            else statusMsg = "No coal in your backpack.";
+        });
+        Component buttonClose = Button("CLOSE", [&] { screen.ExitLoopClosure()(); });
+        Container::Vertical({ buttonFeed, buttonClose });
+
+        Component view;
+        view = Renderer([&] {
+            int remaining = genRef.burnEU;
+            int loaded = genRef.loadedCoal;
+            float burnPct = remaining >= 6400 ? 1.0f : (float)remaining / 6400.0f;
+            if (burnPct < 0) burnPct = 0;
+            const int barW = 40;
+            int fill = (int)(burnPct * barW);
+            string burnFill(fill, '='), burnSpace(barW - fill, ' ');
+            string burning = genRef.isActive() ? "BURNING 8 EU/tick" : "IDLE";
+            Color burnCol = genRef.isActive() ? Color::Green : Color::Red;
+
+            int coalCount = player.getItemCount("coal");
+            return vbox({
+                text("     THERMAL GENERATOR @ (" + to_string(gx) + "," + to_string(gy) + ")")
+                    | bold | color(Color::Yellow),
+                separator(),
+                hbox({ text("  Global EU Pool:  ") | bold,
+                        text(to_string(globalEU) + " / 10000 EU") | color(Color::Cyan) }),
+                separator(),
+                text("  Fuel status") | bold | color(Color::Yellow),
+                hbox({ text("  [" + burnFill + burnSpace + "] "),
+                        text(to_string(remaining) + " EU / 6400 (1 coal)") }),
+                hbox({ text("  Status: ") | bold,
+                        text(burning) | color(burnCol) }),
+                hbox({ text("  Coal loaded:  ") | bold, text("x" + to_string(loaded)) }),
+                separator(),
+                text("  Player inventory:") | bold,
+                hbox({ text("  Coal on hand: ") | bold, text("x" + to_string(coalCount)) | color(Color::Cyan) }),
+                separator(),
+                vbox({
+                    buttonFeed->Render() | flex,
+                    buttonClose->Render() | flex,
+                }) | center,
+                separator(),
+                text(statusMsg) | color(Color::Green),
+                text("Tip: Each coal = 6400 EU (8 EU/tick x 800 ticks ~= 80s). Generator automatically connects to nearby wires.")
+                    | color(Color::GrayDark),
+            }) | border | size(WIDTH, GREATER_THAN, 72) | center;
+        });
+        atomic<bool> uiRunning{ true };
+        view = view | CatchEvent([&](Event e) {
+            if (e == Event::Custom) { globalTick100ms(); return true; }
+            return false;
+        });
+        thread ticker([&screen, &uiRunning]() {
+            while (uiRunning.load()) {
+                this_thread::sleep_for(chrono::milliseconds(100));
+                if (!uiRunning.load()) break;
+                try { screen.PostEvent(Event::Custom); } catch (...) { break; }
+            }
+        });
+
+        screen.Loop(view);
+        uiRunning.store(false);
+        if (ticker.joinable()) ticker.join();
+
+        cursorInfo.bVisible = true;
+        SetConsoleCursorInfo(hConsole, &cursorInfo);
+        message = "& Generator panel closed.";
+        cls();
+    }
+
     void run() {
         introAnimation();
         int selectedSlot = selectSaveSlot();
@@ -2807,7 +3073,7 @@ public:
             showMessage();
 
             setcolor(COLOR_GREY);
-            cout << "\n  [WASD Move] [E Interact] [C Craft] [T Trade] [F Hint] [B Build] [H Help] [F5 Save] [F9 Load] [Q Quit]\n";
+            cout << "\n  [WASD Move] [E Interact] [C Craft] [T Trade] [F Hint] [H Help] [P Save] [L Load] [Q Quit]\n";
             setcolor(COLOR_RESET);
 
             int key = _getch();
@@ -2818,8 +3084,6 @@ public:
                 case 80: processKey('s'); break;
                 case 75: processKey('a'); break;
                 case 77: processKey('d'); break;
-                case 63: processKey(1005); break;
-                case 67: processKey(1009); break;
                 }
             }
             else {
@@ -2856,7 +3120,7 @@ int main() {
         system("pause");
         return 1;
     }
-
+    
     return 0;
 }
 
