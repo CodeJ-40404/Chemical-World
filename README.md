@@ -150,7 +150,7 @@ Chemical-World/
 - [ ] **单元测试**：使用 Google Test 覆盖核心逻辑
 
 ### 长期愿景
-成为一个庞大且融合工业-化学-宇航的硬核游戏，再基础框架完工后，保证没有魔法合成。
+成为一个庞大且融合工业-化学-宇航的硬核游戏，在基础框架与游戏逻辑完工后，**我们尽可能保证没有魔法合成**。
 
 ---
 
@@ -165,15 +165,15 @@ Chemical-World/
 **README 不包含详细玩法教程。** 如需了解具体内容，请查阅：
 
 - **游戏内帮助**：按 `H` 键查看按键列表
-- **项目 Wiki**：[Chemical-World Wiki](wiki/)（本仓库 `wiki/` 目录下）
-  - [Home](wiki/Home) — Wiki 首页与索引
-  - [Gameplay-Basics](wiki/Gameplay-Basics) — 玩法基础
-  - [Power-System](wiki/Power-System.md) — 电力系统详解
-  - [Machines](wiki/Machines) — 机器（高炉 / 车床 / 发电机）
-  - [Trading-Market](wiki/Trading-Market) — 交易市场
-  - [Build-Mode](wiki/Build-Mode) — 建造模式
-  - [Save-System](wiki/Save-System) — 存档系统
-  - [Controls](wiki/Controls) — 按键完整列表
+- **项目 Wiki**：[Chemical-World Wiki](https://github.com/CodeJ-40404/Chemical-World/wiki)（本仓库 `wiki/` 目录下）
+  - [Home](https://github.com/CodeJ-40404/Chemical-World/wiki) — Wiki 首页与索引
+  - [Gameplay-Basics](https://github.com/CodeJ-40404/Chemical-World/wiki/Gameplay-Basics) — 玩法基础
+  - [Power-System](https://github.com/CodeJ-40404/Chemical-World/wiki/Power-System) — 电力系统详解
+  - [Machines](https://github.com/CodeJ-40404/Chemical-World/wiki/Machines) — 机器（高炉 / 车床 / 发电机）
+  - [Trading-Market](https://github.com/CodeJ-40404/Chemical-World/wiki/Trading-Market) — 交易市场
+  - [Build-Mode](https://github.com/CodeJ-40404/Chemical-World/wiki/Build-Mode) — 建造模式
+  - [Save-System](https://github.com/CodeJ-40404/Chemical-World/wiki/Save-System) — 存档系统
+  - [Controls](https://github.com/CodeJ-40404/Chemical-World/wiki/Controls) — 按键完整列表
 
 ---
 
