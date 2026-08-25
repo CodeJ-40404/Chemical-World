@@ -166,14 +166,14 @@ Chemical-World/
 
 - **游戏内帮助**：按 `H` 键查看按键列表
 - **项目 Wiki**：[Chemical-World Wiki](wiki/)（本仓库 `wiki/` 目录下）
-  - [Home](wiki/Home.md) — Wiki 首页与索引
-  - [Gameplay-Basics](wiki/Gameplay-Basics.md) — 玩法基础
+  - [Home](wiki/Home) — Wiki 首页与索引
+  - [Gameplay-Basics](wiki/Gameplay-Basics) — 玩法基础
   - [Power-System](wiki/Power-System.md) — 电力系统详解
-  - [Machines](wiki/Machines.md) — 机器（高炉 / 车床 / 发电机）
-  - [Trading-Market](wiki/Trading-Market.md) — 交易市场
-  - [Build-Mode](wiki/Build-Mode.md) — 建造模式
-  - [Save-System](wiki/Save-System.md) — 存档系统
-  - [Controls](wiki/Controls.md) — 按键完整列表
+  - [Machines](wiki/Machines) — 机器（高炉 / 车床 / 发电机）
+  - [Trading-Market](wiki/Trading-Market) — 交易市场
+  - [Build-Mode](wiki/Build-Mode) — 建造模式
+  - [Save-System](wiki/Save-System) — 存档系统
+  - [Controls](wiki/Controls) — 按键完整列表
 
 ---
 
