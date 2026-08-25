@@ -8,7 +8,7 @@
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
 #include <ftxui/component/screen_interactive.hpp>
-
+#define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
 #include <tchar.h>
 #include <iostream>
