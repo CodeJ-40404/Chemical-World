@@ -1,0 +1,26 @@
+{
+  "player_id": "Chemist",
+  "quests": {
+    "main_1_1": {
+      "lifetime": 0,
+      "state": "[....]"
+    },
+    "main_1_2": {
+      "lifetime": 0,
+      "state": "[LOCK]"
+    },
+    "main_1_3": {
+      "lifetime": 0,
+      "state": "[LOCK]"
+    },
+    "main_2_1": {
+      "lifetime": 0,
+      "state": "[LOCK]"
+    },
+    "side_coal": {
+      "lifetime": 0,
+      "state": "[....]"
+    }
+  },
+  "tracked": []
+}

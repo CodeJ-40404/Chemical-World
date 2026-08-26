@@ -23,9 +23,13 @@
 #include <thread>
 #include <chrono>
 #include <fstream>
+#include <sstream>
+#include <algorithm>
+#include "json.hpp"
 
 using namespace ftxui;
 using namespace std;
+using json = nlohmann::json;
 
 // ======================== 颜色定义 ========================
 #define COLOR_BLACK 0
@@ -52,7 +56,25 @@ inline void setcolor(int color) {
 #endif
 }
 
-inline void cls() { system("cls"); }
+struct QuestItemReward { string name; int quantity = 0; };
+struct QuestCondition {
+    string type, target;
+    int required = 0;
+    int current = 0;
+};
+struct Quest {
+    string id, type, title, description;
+    int chapter = 0;
+    string hint;
+    vector<string> prerequisites;
+    vector<QuestCondition> conditions;
+    int rewardCoins = 0, rewardExp = 0;
+    vector<QuestItemReward> rewardItems;
+    bool repeatable = false;
+    bool collapsed = false;
+};
+
+enum class QuestState { Locked, Active, Completed, Claimed };
 
 // ======================== 数据结构 ========================
 struct InventoryItem {
@@ -108,6 +130,151 @@ struct PlayerData {
         return 0;
     }
 };
+
+class QuestManager {    
+    vector<Quest> quests;
+    map<string, QuestState> states;
+    set<string> tracked;
+    map<string, int> lifetimeProgress;
+
+    static QuestCondition readCondition(const json& j) {
+        QuestCondition c;
+        c.type = j.value("type", "collect");
+        c.target = j.value("target", "");
+        c.required = j.value("count", 1);
+        c.current = j.value("current", 0);
+        return c;
+    }
+    void loadBuiltIn() {
+        quests.clear();
+        {
+            Quest q;
+            q.id = "main_1_1"; q.type = "main"; q.title = "Mine your first iron ore"; q.description = "Find and mine one hematite."; q.chapter = 1;
+            q.conditions.push_back(QuestCondition{"mine", "hematite", 1, 0});
+            q.rewardCoins = 10; q.rewardExp = 5; q.repeatable = false;
+            quests.push_back(q);
+        }
+        {
+            Quest q;
+            q.id = "main_1_2"; q.type = "main"; q.title = "Collect five coal"; q.description = "Gather fuel for the furnace."; q.chapter = 1;
+            q.prerequisites.push_back("main_1_1");
+            q.conditions.push_back(QuestCondition{"collect", "coal", 5, 0});
+            q.rewardCoins = 20; q.rewardExp = 10; q.rewardItems.push_back(QuestItemReward{"coal",3}); q.repeatable = false;
+            quests.push_back(q);
+        }
+        {
+            Quest q;
+            q.id = "main_1_3"; q.type = "main"; q.title = "Earn one hundred coins"; q.description = "Build your fortune at the market."; q.chapter = 1;
+            q.prerequisites.push_back("main_1_2");
+            q.conditions.push_back(QuestCondition{"coins", "", 100, 0});
+            q.rewardCoins = 0; q.rewardExp = 30; q.rewardItems.push_back(QuestItemReward{"steel",1}); q.repeatable = false;
+            quests.push_back(q);
+        }
+        {
+            Quest q;
+            q.id = "main_2_1"; q.type = "main"; q.title = "Build a blast furnace"; q.description = "Place a blast furnace at HOME."; q.chapter = 2;
+            q.prerequisites.push_back("main_1_3");
+            q.conditions.push_back(QuestCondition{"build", "blast_furnace", 1, 0});
+            q.rewardCoins = 50; q.rewardExp = 100; q.repeatable = false;
+            quests.push_back(q);
+        }
+        {
+            Quest q;
+            q.id = "side_coal"; q.type = "side"; q.title = "Coal Supplier"; q.description = "Collect ten coal."; q.chapter = 0;
+            q.conditions.push_back(QuestCondition{"collect", "coal", 10, 0});
+            q.rewardCoins = 30; q.rewardExp = 15; q.rewardItems.push_back(QuestItemReward{"coal",3}); q.repeatable = true;
+            quests.push_back(q);
+        }
+        for (auto& q : quests) q.hint = "Explore the world and use the matching game action.";
+    }
+public:
+    QuestManager() { loadConfig("quests.json"); }
+
+    //感受这地狱一般的码风吧
+    bool loadConfig(const string& path) {
+        ifstream input(path);
+        if (!input) { loadBuiltIn(); return false; }
+        try {
+            json root; input >> root;
+            quests.clear();
+            for (const auto& j : root.at("quests")) {
+                Quest q;
+                q.id = j.at("id").get<string>(); q.type = j.value("type", "main");
+                q.chapter = j.value("chapter", 0); q.title = j.at("title").get<string>();
+                q.description = j.value("description", ""); q.hint = j.value("hint", "");
+                q.prerequisites = j.value("prerequisites", vector<string>{});
+                for (const auto& c : j.value("conditions", json::array())) q.conditions.push_back(readCondition(c));
+                auto r = j.value("rewards", json::object());
+                q.rewardCoins = r.value("coins", 0); q.rewardExp = r.value("exp", 0);
+                for (const auto& item : r.value("items", json::array()))
+                    q.rewardItems.push_back({item.value("name", ""), item.value("quantity", 0)});
+                q.repeatable = j.value("repeatable", false);
+                quests.push_back(q);
+            }
+            if (quests.empty()) throw runtime_error("empty quest list");
+            for (const auto& q : quests) states[q.id] = QuestState::Locked;
+            return true;
+        }
+        catch (...) { loadBuiltIn(); return false; }
+    }
+
+    void refresh(PlayerData& player) {
+        for (auto& q : quests) {
+            auto& state = states[q.id];
+            bool prerequisitesMet = true;
+            for (const auto& id : q.prerequisites)
+                if (states[id] != QuestState::Completed && states[id] != QuestState::Claimed) prerequisitesMet = false;
+            if (state == QuestState::Claimed && !q.repeatable) continue;
+            if (!prerequisitesMet) { state = QuestState::Locked; continue; }
+            bool complete = true;
+            for (auto& c : q.conditions) {
+                if (c.type == "collect") c.current = player.getItemCount(c.target);
+                else if (c.type == "coins") c.current = player.coins;
+                else if (c.type == "mine" || c.type == "build") c.current = min(c.required, lifetimeProgress[q.id]);
+                complete = complete && c.current >= c.required;
+            }
+            state = complete ? QuestState::Completed : QuestState::Active;
+        }
+    }
+    void notify(const string& action, const string& target, PlayerData& player) {
+        for (auto& q : quests) for (auto& c : q.conditions)
+            if (c.type == action && (c.target.empty() || c.target == target)) lifetimeProgress[q.id]++;
+        refresh(player);
+    }
+    bool claim(const string& id, PlayerData& player) {
+        auto it = find_if(quests.begin(), quests.end(), [&](const Quest& q) { return q.id == id; });
+        if (it == quests.end() || states[id] != QuestState::Completed) return false;
+        player.coins += it->rewardCoins; player.exp += it->rewardExp;
+        for (const auto& item : it->rewardItems) player.addItem(item.name, item.quantity);
+        states[id] = it->repeatable ? QuestState::Active : QuestState::Claimed;
+        if (it->repeatable) for (auto& c : it->conditions) c.current = 0;
+        return true;
+    }
+    const vector<Quest>& all() const { return quests; }
+    QuestState state(const string& id) const { auto it = states.find(id); return it == states.end() ? QuestState::Locked : it->second; }
+    bool isTracked(const string& id) const { return tracked.count(id) != 0; }
+    void toggleTracked(const string& id) { if (!tracked.erase(id)) tracked.insert(id); }
+    void toggleCollapsed(const string& id) { for (auto& q : quests) if (q.id == id) q.collapsed = !q.collapsed; }
+    int current(const Quest& q) const { return q.conditions.empty() ? 0 : q.conditions.front().current; }
+    string stateText(const Quest& q) const {
+        switch (state(q.id)) { case QuestState::Completed: return "[DONE]"; case QuestState::Claimed: return "[GOT ]"; case QuestState::Active: return "[....]"; default: return "[LOCK]"; }
+    }
+    bool saveProgress(const string& path, const string& playerId) const {
+        json root; root["player_id"] = playerId; root["tracked"] = json::array();
+        for (const auto& id : tracked) root["tracked"].push_back(id);
+        root["quests"] = json::object();
+        for (const auto& q : quests) { root["quests"][q.id]["state"] = stateText(q); root["quests"][q.id]["lifetime"] = lifetimeProgress.count(q.id) ? lifetimeProgress.at(q.id) : 0; }
+        ofstream output(path); if (!output) return false; output << root.dump(2); return output.good();
+    }
+    void loadProgress(const string& path) {
+        ifstream input(path); if (!input) return;
+        try { json root; input >> root; for (const auto& id : root.value("tracked", vector<string>{})) tracked.insert(id);
+            for (auto& q : quests) if (root.contains("quests") && root["quests"].contains(q.id)) lifetimeProgress[q.id] = root["quests"][q.id].value("lifetime", 0); }
+        catch (...) {}
+    }
+};
+
+inline void cls() { system("cls"); }
 
 // 物品售价表（文件级自由函数，供 TradeUI 等使用）
 int itemPrice(const string& name) {
@@ -237,7 +404,7 @@ private:
         {"Copper Smelt",  "chalcopyrite","copper",      2, 1, 1, 30000},
         {"Gold Smelting", "gold_ore",    "gold_ingot",  2, 1, 1, 30000},
         {"Silver Smelt",  "silver_ore",  "silver_ingot",2, 1, 1, 30000},
-        // 新路径：dust → ingot ×2 效率（GT:NH 经典处理链奖励）
+        // 新路径：dust → ingot ×2 效率
         {"Steel From Dust",  "hematite_dust",  "steel",       2, 1, 2, 30000},
         {"Steel From Dust",  "magnetite_dust", "steel",       2, 1, 2, 30000},
         {"Aluminum From Dust","bauxite_dust",  "aluminum",    2, 1, 2, 30000},
@@ -607,7 +774,7 @@ public:
         if (animState == Machining) {
             if (!isRunning) {
                 isRunning = true;
-                addLog("⚡ Power restored. Machining resumed.");
+                addLog("! Power restored. Machining resumed.");
             }
             frameIndex++;
             accumulatedMs += elapsedMs;
@@ -1476,8 +1643,8 @@ public:
             "  +-------------------+",
             "  |  EARTH BLAST FURN.|",
             "  |                   |",
-            "  |    (o)    (o)     |",
-            "  |    |______|       |",
+            "  |    [O]-----[O]     |",
+            "  |    |_|_|_|_|       |",
             "  |   /        \\      |",
             string("  |  ") + fire + string(string::size_type(19 - 3 - fire.size()), ' ') + string("|"),
             "  |   \\________/      |",
@@ -1887,7 +2054,7 @@ public:
                 text(" EVENT LOG") | bold | color(Color::Yellow),
                 logViewer->Render() | flex,
                 text(statusMessage) | color(Color::Yellow),
-                text("Tip: 2 EU/tick consumed during machining. No power ⇒ machining pauses.") |
+                text("Tip: 2 EU/tick consumed during machining. No power -> machining pauses.") |
                     color(Color::GrayDark),
                 }) | border | size(WIDTH, GREATER_THAN, 82);
             });
@@ -2512,6 +2679,7 @@ private:
     Area currentArea = Area::Home;
     bool running = true;
     int activeSaveSlot = 1;
+    QuestManager questManager;
     string message = "Welcome to Chemical World! WASD to move, E to interact, F to open furnace";
     bool tutorialActive = true;
     int tutorialStep = 0;
@@ -2604,7 +2772,9 @@ private:
             output << m.x << ' ' << m.y << ' ' << m.type << ' '
                 << m.remainingBurnEU << ' ' << m.loadedCoal << ' ' << tmp << '\n';
         }
-        return output.good();
+        bool ok = output.good();
+        questManager.saveProgress("quest_progress.json", player.name);
+        return ok;
     }
 
     bool loadGame(int slot) {
@@ -2694,6 +2864,8 @@ private:
         // 存档里机器/电线的 tile.display 可能已被旧版 area 切换 regenerate 覆盖成 '.'
         // （幽灵方块：meta 在但 gameMap 显示丢了）。这里从 machineMeta 反向 stamp 修复。
         rehydrateMachineTiles();
+        questManager.loadProgress("quest_progress.json");
+        questManager.refresh(player);
         return true;
     }
 
@@ -2707,6 +2879,7 @@ private:
         player.x = 10;   // 玩家出生 (10,5)，避开车床 L 2×2 (8,5)-(9,6)
         player.y = 5;
         player.name = "Chemist";
+        questManager.loadProgress("quest_progress.json");
         player.addItem("water", 5, "basic", 3);
         player.addItem("coal", 5, "fuel", 8);
         player.addItem("sand", 3, "material", 2);
@@ -3431,7 +3604,16 @@ private:
         case 's': case 'S': newY++; break;
         case 'a': case 'A': newX--; break;
         case 'b': case 'B':
-            if (currentArea == Area::Home) openBuildUI();
+            if (currentArea == Area::Home) {
+                size_t oldMachineCount = machineMeta.size();
+                openBuildUI();
+                if (machineMeta.size() > oldMachineCount) {
+                    for (size_t i = oldMachineCount; i < machineMeta.size(); ++i) {
+                        string built = machineMeta[i].type == 'F' ? "blast_furnace" : "machine";
+                        questManager.notify("build", built, player);
+                    }
+                }
+            }
             else message = "Can only build at home.";
             return;
         case 'd': case 'D': newX++; break;
@@ -3524,6 +3706,9 @@ private:
             return;
         case 'c': case 'C':
             openBackpack();
+            return;
+        case 'j': case 'J':
+            openQuestUI();
             return;
         case 't': case 'T':
             trade();
@@ -3850,6 +4035,56 @@ private:
     }
 
 public:
+    void openQuestUI() {
+        auto screen = ScreenInteractive::Fullscreen();
+        questManager.refresh(player);
+        vector<const Quest*> visible;
+        vector<string> labels;
+        for (const auto& q : questManager.all()) {
+            visible.push_back(&q);
+            labels.push_back(string(q.type == "side" ? "  +-- " : "  |-- ") + questManager.stateText(q) + " " + q.id + " " + q.title + (questManager.isTracked(q.id) ? " *" : ""));
+        }
+        int selected = 0, zoom = 100;
+        string status = "ENTER details  SPACE track  R claim  LEFT/RIGHT fold  +/- zoom  J close";
+        auto menu = Menu(&labels, &selected);
+        auto view = Renderer(menu, [&] {
+            Elements lines;
+            lines.push_back(text("QUEST BOOK  [ZOOM " + to_string(zoom) + "%]") | bold | color(Color::Yellow));
+            lines.push_back(separator());
+            for (size_t i = 0; i < visible.size(); ++i) {
+                string line = ((int)i == selected ? "> " : "  ") + labels[i];
+                auto e = text(line);
+                if (questManager.state(visible[i]->id) == QuestState::Completed) e = e | color(Color::Green);
+                else if (questManager.state(visible[i]->id) == QuestState::Locked) e = e | color(Color::GrayDark);
+                else if (visible[i]->type == "side") e = e | color(Color::Cyan);
+                lines.push_back(e);
+            }
+            if (!visible.empty()) {
+                const Quest& q = *visible[min(selected, (int)visible.size() - 1)];
+                lines.push_back(separator()); lines.push_back(text("SELECTED: " + q.title) | bold);
+                lines.push_back(text("  " + q.description));
+                for (const auto& c : q.conditions) lines.push_back(text("  " + c.type + " " + c.target + " (" + to_string(c.current) + "/" + to_string(c.required) + ")"));
+                lines.push_back(text("  Reward: " + to_string(q.rewardCoins) + " coins, " + to_string(q.rewardExp) + " exp"));
+                lines.push_back(text("  Hint: " + q.hint));
+            }
+            lines.push_back(separator()); lines.push_back(text(status) | color(Color::GrayDark));
+            return vbox(lines) | border | size(WIDTH, GREATER_THAN, max(70, 50 + zoom / 2));
+        });
+        view |= CatchEvent([&](Event e) {
+            if (e == Event::Escape || e == Event::Character("j") || e == Event::Character("J")) { screen.ExitLoopClosure()(); return true; }
+            if (e == Event::Character("+")) { zoom = min(200, zoom + 10); return true; }
+            if (e == Event::Character("-")) { zoom = max(80, zoom - 10); return true; }
+            if (visible.empty()) return false;
+            if (e == Event::Character(" ")) { questManager.toggleTracked(visible[selected]->id); status = "Tracking updated."; return true; }
+            if (e == Event::Character("r") || e == Event::Character("R")) { status = questManager.claim(visible[selected]->id, player) ? "Reward claimed." : "Quest is not ready."; return true; }
+            if (e == Event::ArrowLeft || e == Event::ArrowRight) { questManager.toggleCollapsed(visible[selected]->id); status = "Branch fold state updated."; return true; }
+            return false;
+        });
+        screen.Loop(view);
+        questManager.saveProgress("quest_progress.json", player.name);
+        cls();
+    }
+
     // ===== public getters for UI =====
     int getGlobalEU() const { return globalEU; }
     int countBurningGenerators() const {
@@ -4612,7 +4847,7 @@ public:
             showMessage();
 
             setcolor(COLOR_GREY);
-            cout << "\n  [WASD Move] [E Interact] [C Backpack] [T Trade] [B Build] [F Hint] [H Help] [P Save] [L Load] [Q Quit]\n";
+            cout << "\n  [WASD Move] [E Interact] [C Backpack] [T Trade] [B Build] [J Quests] [F Hint] [H Help] [P Save] [L Load] [Q Quit]\n";
             setcolor(COLOR_RESET);
 
             int key = _getch();
@@ -4665,5 +4900,11 @@ int main() {
 
 
 // ============== THE END ===================
-//                 鸣谢
-//               ??????????
+// 这是一个留言板，欢迎你在下方留下你想说的
+// 
+// 2026-8-25 19:13(UTC+8:00) CodeJ-40404
+// > 这是一个示范
+// > Location : China
+// 
+// 
+// xxx
