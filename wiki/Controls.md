@@ -13,6 +13,7 @@
 | `B` | 打开建造模式 | 仅家园 |
 | `C` | 打开合成菜单 | |
 | `T` | 打开交易市场 | |
+| `K` | 打开银行 / 投资台 | 查看余额，买卖黄金与 Bitcoin |
 | `F` | 高炉位置提示 | 仅提示，不打开 UI |
 | `H` | 显示帮助 | |
 | `P` | 保存到当前手动档 | slot 1/2/3 |
@@ -44,7 +45,7 @@
 
 ## 🖥️ FTXUI 全屏界面操作
 
-所有 FTXUI 全屏界面（FurnaceUI / LatheUI / TradeUI / BuildUI / GeneratorPanel）通用操作：
+所有 FTXUI 全屏界面（FurnaceUI / LatheUI / TradeUI / BankUI / BuildUI / GeneratorPanel）通用操作：
 
 | 按键 | 行为 |
 |------|------|

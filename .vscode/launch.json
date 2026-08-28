@@ -8,8 +8,8 @@
       "args": [],
       "stopAtEntry": false,
       "externalConsole": true,
-      "cwd": "d:/c++/repos/Chemical-World/Chemical-World",
-      "program": "d:/c++/repos/Chemical-World/Chemical-World/build/Debug/outDebug",
+      "cwd": "d:/c++/repos/Chemical-World",
+      "program": "d:/c++/repos/Chemical-World/build/Debug/outDebug",
       "MIMode": "gdb",
       "miDebuggerPath": "gdb",
       "setupCommands": [

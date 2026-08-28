@@ -2,13 +2,18 @@
 // 使用 FTXUI 6.1.9 实现图形界面
 // 特别警告：目前 !!!游戏内容!!! 请使用全英文+基础ascii以避免乱码，注释可以使用中文
 
+//from FTXUI
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/screen.hpp>
 #include <ftxui/screen/string.hpp>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
 #include <ftxui/component/screen_interactive.hpp>
+
+//WIN32_MSVC_NO_SECURE_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS
+
+//C++ STL+Windows
 #include <windows.h>
 #include <tchar.h>
 #include <iostream>
@@ -25,6 +30,8 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+
+//from- nlohmann json
 #include "json.hpp"
 
 using namespace ftxui;
@@ -54,6 +61,7 @@ inline void setcolor(int color) {
     HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
     SetConsoleTextAttribute(h, color);
 #endif
+//TODO: Linux&Mac
 }
 
 struct QuestItemReward { string name; int quantity = 0; };
@@ -74,7 +82,12 @@ struct Quest {
     bool collapsed = false;
 };
 
-enum class QuestState { Locked, Active, Completed, Claimed };
+enum class QuestState {
+    Locked,
+    Active,
+    Completed, 
+    Claimed
+};
 
 // ======================== 数据结构 ========================
 struct InventoryItem {
@@ -128,6 +141,41 @@ struct PlayerData {
             if (item.name == name) return item.quantity;
         }
         return 0;
+    }
+};
+
+struct InvestmentMarket {
+    struct Asset {
+        string name;
+        string symbol;
+        int price;
+        int basePrice;
+        int minPrice;
+        int maxPrice;
+        int volatility;
+        int owned = 0;
+        int costBasis = 0;
+    };
+
+    vector<Asset> assets = {
+        {"Gold", "GOLD", 100, 100, 25, 500, 3, 0, 0},
+        {"Bitcoin", "BTC", 250, 250, 40, 1200, 15, 0, 0},
+    };
+    int tickCounter = 0;
+
+    void update() {
+        if (++tickCounter < 10) return;
+        tickCounter = 0;
+        for (auto& asset : assets) {
+            int movement = (rand() % (asset.volatility * 2 + 1)) - asset.volatility;
+            int trend = (asset.price < asset.basePrice ? 2 : asset.price > asset.basePrice ? -2 : 0);
+            asset.price = max(asset.minPrice, min(asset.maxPrice, asset.price + movement + trend));
+        }
+    }
+
+    Asset* find(const string& symbol) {
+        for (auto& asset : assets) if (asset.symbol == symbol) return &asset;
+        return nullptr;
     }
 };
 
@@ -190,91 +238,234 @@ class QuestManager {
 public:
     QuestManager() { loadConfig("quests.json"); }
 
-    //感受这地狱一般的码风吧
+
     bool loadConfig(const string& path) {
         ifstream input(path);
-        if (!input) { loadBuiltIn(); return false; }
+
+        if (!input) { 
+            loadBuiltIn(); 
+            return false; 
+        }
+
         try {
-            json root; input >> root;
+            json root;
+            input >> root;
             quests.clear();
             for (const auto& j : root.at("quests")) {
+
                 Quest q;
-                q.id = j.at("id").get<string>(); q.type = j.value("type", "main");
-                q.chapter = j.value("chapter", 0); q.title = j.at("title").get<string>();
-                q.description = j.value("description", ""); q.hint = j.value("hint", "");
+
+                q.id = j.at("id").get<string>(); 
+                q.type = j.value("type", "main");
+                q.chapter = j.value("chapter", 0);
+                q.title = j.at("title").get<string>();
+                q.description = j.value("description", ""); 
+                q.hint = j.value("hint", "");
                 q.prerequisites = j.value("prerequisites", vector<string>{});
-                for (const auto& c : j.value("conditions", json::array())) q.conditions.push_back(readCondition(c));
+
+                for (const auto& c : j.value("conditions", json::array())) {
+                    q.conditions.push_back(readCondition(c));
+                }
+
                 auto r = j.value("rewards", json::object());
-                q.rewardCoins = r.value("coins", 0); q.rewardExp = r.value("exp", 0);
-                for (const auto& item : r.value("items", json::array()))
-                    q.rewardItems.push_back({item.value("name", ""), item.value("quantity", 0)});
+
+                q.rewardCoins = r.value("coins", 0); 
+                q.rewardExp = r.value("exp", 0);
+
+                for (const auto& item : r.value("items", json::array())) {
+                    q.rewardItems.push_back({ item.value("name", ""), item.value("quantity", 0) });
+                }
+
                 q.repeatable = j.value("repeatable", false);
                 quests.push_back(q);
             }
-            if (quests.empty()) throw runtime_error("empty quest list");
-            for (const auto& q : quests) states[q.id] = QuestState::Locked;
+            if (quests.empty()) {
+                throw runtime_error("empty quest list");
+            }
+            for (const auto& q : quests) {
+                states[q.id] = QuestState::Locked;
+            }
+
             return true;
         }
-        catch (...) { loadBuiltIn(); return false; }
+        catch (...) {
+            loadBuiltIn(); return false; 
+        }
     }
 
     void refresh(PlayerData& player) {
         for (auto& q : quests) {
             auto& state = states[q.id];
             bool prerequisitesMet = true;
-            for (const auto& id : q.prerequisites)
+            for (const auto& id : q.prerequisites) {
                 if (states[id] != QuestState::Completed && states[id] != QuestState::Claimed) prerequisitesMet = false;
-            if (state == QuestState::Claimed && !q.repeatable) continue;
-            if (!prerequisitesMet) { state = QuestState::Locked; continue; }
+            }
+
+            if (state == QuestState::Claimed && !q.repeatable) {
+                continue;
+            }
+
+            if (!prerequisitesMet) { 
+                state = QuestState::Locked; continue; 
+            }
+
             bool complete = true;
+
             for (auto& c : q.conditions) {
-                if (c.type == "collect") c.current = player.getItemCount(c.target);
-                else if (c.type == "coins") c.current = player.coins;
-                else if (c.type == "mine" || c.type == "build") c.current = min(c.required, lifetimeProgress[q.id]);
+                if (c.type == "collect") {
+                    c.current = player.getItemCount(c.target);
+                }
+                else if (c.type == "coins") {
+                    c.current = player.coins;
+                }
+                else if (c.type == "mine" || c.type == "build") {
+                    c.current = min(c.required, lifetimeProgress[q.id]);
+                }
+
                 complete = complete && c.current >= c.required;
             }
+
             state = complete ? QuestState::Completed : QuestState::Active;
         }
     }
+
     void notify(const string& action, const string& target, PlayerData& player) {
         for (auto& q : quests) for (auto& c : q.conditions)
-            if (c.type == action && (c.target.empty() || c.target == target)) lifetimeProgress[q.id]++;
+            if (c.type == action && (c.target.empty() || c.target == target))           lifetimeProgress[q.id]++;
         refresh(player);
     }
+
     bool claim(const string& id, PlayerData& player) {
-        auto it = find_if(quests.begin(), quests.end(), [&](const Quest& q) { return q.id == id; });
-        if (it == quests.end() || states[id] != QuestState::Completed) return false;
-        player.coins += it->rewardCoins; player.exp += it->rewardExp;
-        for (const auto& item : it->rewardItems) player.addItem(item.name, item.quantity);
+        auto it = find_if(quests.begin(), quests.end(), [&](const Quest& q) { 
+            return q.id == id; 
+            });
+
+        if (it == quests.end() || states[id] != QuestState::Completed) {
+            return false;
+        }
+
+        player.coins += it->rewardCoins; 
+        player.exp += it->rewardExp;
+
+        for (const auto& item : it->rewardItems) {
+            player.addItem(item.name, item.quantity);
+        }
+
         states[id] = it->repeatable ? QuestState::Active : QuestState::Claimed;
-        if (it->repeatable) for (auto& c : it->conditions) c.current = 0;
+
+        if (it->repeatable) {
+            for (auto& c : it->conditions) {
+                c.current = 0;
+            }
+        }
+
         return true;
     }
-    const vector<Quest>& all() const { return quests; }
-    QuestState state(const string& id) const { auto it = states.find(id); return it == states.end() ? QuestState::Locked : it->second; }
-    bool isTracked(const string& id) const { return tracked.count(id) != 0; }
-    void toggleTracked(const string& id) { if (!tracked.erase(id)) tracked.insert(id); }
-    void toggleCollapsed(const string& id) { for (auto& q : quests) if (q.id == id) q.collapsed = !q.collapsed; }
-    int current(const Quest& q) const { return q.conditions.empty() ? 0 : q.conditions.front().current; }
+    const vector<Quest>& all() const {
+        return quests; 
+    }
+
+    QuestState state(const string& id) const {
+        auto it = states.find(id); 
+        return it == states.end() ? QuestState::Locked : it->second; 
+    }
+
+    bool isTracked(const string& id) const {
+        return tracked.count(id) != 0; 
+    }
+
+    void toggleTracked(const string& id) { 
+        if (!tracked.erase(id)) tracked.insert(id); 
+    }
+
+    void toggleCollapsed(const string& id) {
+        for (auto& q : quests) {
+            if (q.id == id) {
+                q.collapsed = !q.collapsed;
+            }
+        }
+    }
+
+    int current(const Quest& q) const { 
+        return q.conditions.empty() ? 0 : q.conditions.front().current; 
+    }
+
     string stateText(const Quest& q) const {
-        switch (state(q.id)) { case QuestState::Completed: return "[DONE]"; case QuestState::Claimed: return "[GOT ]"; case QuestState::Active: return "[....]"; default: return "[LOCK]"; }
+        switch (state(q.id))
+        {
+            case QuestState::Completed: 
+                return "[DONE]";
+            case QuestState::Claimed: 
+                return "[GOT ]";
+            case QuestState::Active: 
+                return "[....]";
+            default: 
+                return "[LOCK]";
+        }
     }
+
     bool saveProgress(const string& path, const string& playerId) const {
-        json root; root["player_id"] = playerId; root["tracked"] = json::array();
-        for (const auto& id : tracked) root["tracked"].push_back(id);
+        json root; 
+        root["player_id"] = playerId; 
+        root["tracked"] = json::array();
+
+        for (const auto& id : tracked) {
+            root["tracked"].push_back(id);
+        }
+
         root["quests"] = json::object();
-        for (const auto& q : quests) { root["quests"][q.id]["state"] = stateText(q); root["quests"][q.id]["lifetime"] = lifetimeProgress.count(q.id) ? lifetimeProgress.at(q.id) : 0; }
-        ofstream output(path); if (!output) return false; output << root.dump(2); return output.good();
+
+        for (const auto& q : quests) {
+            root["quests"][q.id]["state"] = stateText(q); 
+            root["quests"][q.id]["lifetime"] = lifetimeProgress.count(q.id) ? lifetimeProgress.at(q.id) : 0;
+        }
+
+        ofstream output(path);
+
+        if (!output) {
+            return false;
+        }
+
+        output << root.dump(2); 
+
+        return output.good();
     }
+
     void loadProgress(const string& path) {
-        ifstream input(path); if (!input) return;
-        try { json root; input >> root; for (const auto& id : root.value("tracked", vector<string>{})) tracked.insert(id);
-            for (auto& q : quests) if (root.contains("quests") && root["quests"].contains(q.id)) lifetimeProgress[q.id] = root["quests"][q.id].value("lifetime", 0); }
-        catch (...) {}
+        ifstream input(path);
+
+        if (!input) {
+            return;
+        }
+
+        try {
+            json root;
+
+            input >> root;
+
+            for (const auto& id : root.value("tracked", vector<string>{})) {
+                tracked.insert(id);
+            }
+
+            for (auto& q : quests) {
+                if (root.contains("quests") && root["quests"].contains(q.id)) {
+                    lifetimeProgress[q.id] = root["quests"][q.id].value("lifetime", 0);
+                }
+            }
+
+        }
+        catch (...) {
+            //NULL
+        }
     }
 };
 
-inline void cls() { system("cls"); }
+
+inline void cls() {
+#ifdef WIN32
+    system("cls"); 
+#endif
+}
 
 // 物品售价表（文件级自由函数，供 TradeUI 等使用）
 int itemPrice(const string& name) {
@@ -2506,6 +2697,116 @@ public:
     bool isRunning() { return running; }
 };
 
+class BankUI {
+private:
+    PlayerData& player;
+    InvestmentMarket& market;
+    ScreenInteractive& screen;
+    bool running = true;
+    string statusMessage = "Your coins are held in the bank account.";
+    int selected = 0;
+    vector<string> assetLabels;
+    Component assetMenu;
+    Component buttonBuy;
+    Component buttonSell;
+    Component buttonClose;
+    Component mainContainer;
+
+    void rebuildLabels() {
+        assetLabels.clear();
+        for (const auto& asset : market.assets) {
+            assetLabels.push_back("  " + asset.name + " (" + asset.symbol + ")  " +
+                to_string(asset.price) + "c  x" + to_string(asset.owned));
+        }
+        if (selected >= (int)assetLabels.size()) selected = 0;
+    }
+
+    InvestmentMarket::Asset* selectedAsset() {
+        if (selected < 0 || selected >= (int)market.assets.size()) return nullptr;
+        return &market.assets[selected];
+    }
+
+public:
+    BankUI(PlayerData& p, InvestmentMarket& m, ScreenInteractive& s)
+        : player(p), market(m), screen(s) {
+        rebuildLabels();
+        assetMenu = Menu(&assetLabels, &selected);
+        buttonBuy = Button("BUY 1", [&] {
+            auto* asset = selectedAsset();
+            if (!asset) return;
+            if (player.coins < asset->price) {
+                statusMessage = "Not enough bank balance.";
+                return;
+            }
+            player.coins -= asset->price;
+            asset->owned++;
+            asset->costBasis += asset->price;
+            statusMessage = "Bought 1 " + asset->symbol + " from the bank.";
+            rebuildLabels();
+        });
+        buttonSell = Button("SELL 1", [&] {
+            auto* asset = selectedAsset();
+            if (!asset || asset->owned <= 0) {
+                statusMessage = "You do not own this asset.";
+                return;
+            }
+            player.coins += asset->price;
+            asset->owned--;
+            asset->costBasis = asset->owned == 0
+                ? 0 : max(0, asset->costBasis - asset->price);
+            statusMessage = "Sold 1 " + asset->symbol + " into your bank balance.";
+            rebuildLabels();
+        });
+        buttonClose = Button("CLOSE", [&] {
+            running = false;
+            screen.ExitLoopClosure()();
+        });
+        auto buttons = Container::Horizontal({ buttonBuy, buttonSell, buttonClose });
+        auto layout = Container::Vertical({ assetMenu, buttons });
+        mainContainer = Renderer(layout, [&, buttons] {
+            auto* asset = selectedAsset();
+            string details = asset
+                ? "  " + asset->name + " | price " + to_string(asset->price) +
+                  "c | owned x" + to_string(asset->owned) +
+                                    " | value " + to_string(asset->owned * asset->price) + "c" +
+                                    " | cost " + to_string(asset->costBasis) + "c" +
+                                    " | P/L " + to_string(asset->owned * asset->price - asset->costBasis) + "c"
+                : "  No asset selected.";
+            return vbox({
+                text("              BANK // INVESTMENT DESK") | bold | color(Color::Yellow),
+                separator(),
+                text("  Account balance: " + to_string(player.coins) + "c") | color(Color::Cyan),
+                text("  All game earnings and spending use this bank balance.") | color(Color::GrayDark),
+                separator(),
+                text("  MARKET QUOTES") | bold | color(Color::Cyan),
+                assetMenu->Render() | flex,
+                separator(),
+                text(details) | color(Color::Green),
+                text("  Prices update with the game clock. Gold is steadier; BTC is more volatile.") | color(Color::GrayDark),
+                separator(),
+                buttons->Render() | center,
+                text(statusMessage) | color(Color::Yellow),
+                text("  UP/DOWN select an asset, BUY/SELL trade one unit, ESC closes.") | color(Color::GrayDark),
+            }) | border | size(WIDTH, GREATER_THAN, 78);
+        });
+        mainContainer |= CatchEvent([&](Event e) {
+            if (e == Event::Custom) {
+                rebuildLabels();
+                return true;
+            }
+            if (e == Event::Escape) {
+                running = false;
+                screen.ExitLoopClosure()();
+                return true;
+            }
+            return false;
+        });
+    }
+
+    Component getComponent() { return mainContainer; }
+    bool isRunning() const { return running; }
+};
+
 // ============ GameMap::generateWasteland 多彩世界：8 种 Wasteland 子群系 ============
 void GameMap::generateWasteland(WastelandBiome b) {
     area = Area::Wasteland;
@@ -2680,6 +2981,7 @@ private:
     bool running = true;
     int activeSaveSlot = 1;
     QuestManager questManager;
+    InvestmentMarket investmentMarket;
     string message = "Welcome to Chemical World! WASD to move, E to interact, F to open furnace";
     bool tutorialActive = true;
     int tutorialStep = 0;
@@ -2734,7 +3036,7 @@ private:
     bool saveGame(int slot) {
         ofstream output(savePath(slot));
         if (!output) return false;
-        output << "CHEMICAL_WORLD_SAVE 4\n";
+        output << "CHEMICAL_WORLD_SAVE 5\n";
         output << player.name << '\n' << player.level << ' ' << player.coins << ' '
             << player.exp << ' ' << player.x << ' ' << player.y << '\n';
         output << static_cast<int>(currentArea) << '\n';
@@ -2772,6 +3074,9 @@ private:
             output << m.x << ' ' << m.y << ' ' << m.type << ' '
                 << m.remainingBurnEU << ' ' << m.loadedCoal << ' ' << tmp << '\n';
         }
+        output << investmentMarket.tickCounter << ' ' << investmentMarket.assets.size() << '\n';
+        for (const auto& asset : investmentMarket.assets)
+            output << asset.symbol << ' ' << asset.price << ' ' << asset.owned << ' ' << asset.costBasis << '\n';
         bool ok = output.good();
         questManager.saveProgress("quest_progress.json", player.name);
         return ok;
@@ -2782,7 +3087,7 @@ private:
         string header;
         int version = 0;
         if (!input || !(input >> header >> version) || header != "CHEMICAL_WORLD_SAVE" ||
-            (version != 2 && version != 3 && version != 4)) return false;
+            (version != 2 && version != 3 && version != 4 && version != 5)) return false;
         if (!(input >> player.name >> player.level >> player.coins >> player.exp >> player.x >> player.y)) return false;
         int savedArea = 0;
         if (!(input >> savedArea) || savedArea < 0 || savedArea > 2) return false;
@@ -2819,6 +3124,7 @@ private:
         washers.clear();
         centrifuges.clear();
         poweredMachines.clear();
+        investmentMarket = InvestmentMarket{};
         furnace = BlastFurnace{};
         lathe = Lathe{};
 
@@ -2831,7 +3137,7 @@ private:
                 }
             }
         }
-        if (version == 3 || version == 4) {
+        if (version >= 3 && version <= 5) {
             int tmp = 0;
             if (!(input >> tmp)) return false; gen_blueprint_unlocked = !!tmp;
             if (!(input >> tmp)) return false; wire_blueprint_unlocked = !!tmp;
@@ -2859,6 +3165,21 @@ private:
                 }
                 // X/W/R 机器实例在打开各自 UI 时按 find-or-insert 重建，
                 // 这里只需保留 machineMeta 条目（用于 E 键查找与地图渲染）。
+            }
+        }
+        if (version == 5) {
+            size_t assetCount = 0;
+            if (!(input >> investmentMarket.tickCounter >> assetCount)) return false;
+            for (size_t i = 0; i < assetCount; ++i) {
+                string symbol;
+                int price = 0, owned = 0, costBasis = 0;
+                if (!(input >> symbol >> price >> owned >> costBasis)) return false;
+                auto* asset = investmentMarket.find(symbol);
+                if (asset) {
+                    asset->price = max(asset->minPrice, min(asset->maxPrice, price));
+                    asset->owned = max(0, owned);
+                    asset->costBasis = max(0, costBasis);
+                }
             }
         }
         // 存档里机器/电线的 tile.display 可能已被旧版 area 切换 regenerate 覆盖成 '.'
@@ -2899,6 +3220,7 @@ private:
         washers.clear();
         centrifuges.clear();
         poweredMachines.clear();
+        investmentMarket = InvestmentMarket{};
         machineMeta.clear();
         machineMeta.push_back({ 5, 5, 'F', 0, 0, false });   // BlastFurnace 左上 (5,5)
         machineMeta.push_back({ 8, 5, 'L', 0, 0, false });   // Lathe 左上 (8,5)
@@ -3235,6 +3557,34 @@ private:
         cls();
     }
 
+    void openBankUI() {
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        CONSOLE_CURSOR_INFO cursorInfo;
+        GetConsoleCursorInfo(hConsole, &cursorInfo);
+        cursorInfo.bVisible = false;
+        SetConsoleCursorInfo(hConsole, &cursorInfo);
+
+        auto screen = ScreenInteractive::Fullscreen();
+        BankUI bankUI(player, investmentMarket, screen);
+        atomic<bool> uiRunning{ true };
+        thread ticker([&]() {
+            while (uiRunning.load() && bankUI.isRunning()) {
+                this_thread::sleep_for(chrono::milliseconds(100));
+                if (!uiRunning.load() || !bankUI.isRunning()) break;
+                globalTick100ms();
+                try { screen.PostEvent(Event::Custom); } catch (...) { break; }
+            }
+        });
+        screen.Loop(bankUI.getComponent());
+        uiRunning.store(false);
+        if (ticker.joinable()) ticker.join();
+
+        cursorInfo.bVisible = true;
+        SetConsoleCursorInfo(hConsole, &cursorInfo);
+        message = "& Bank session closed.";
+        cls();
+    }
+
     int getItemPrice(const string& item) {
         return itemPrice(item);
     }
@@ -3556,6 +3906,7 @@ private:
         cout << "  E     - Interact nearby (mine/enter/use machine)\n";
         cout << "  C     - Open backpack\n";
         cout << "  T     - Trading market (buy blueprints/sell goods)\n";
+        cout << "  K     - Bank (save coins, buy/sell gold and Bitcoin)\n";
         cout << "  B     - Build menu (home only): place generator/wire/machines/decor\n";
         cout << "  F     - Hint only; use E beside furnace at home\n";
         cout << "  H     - Show help\n";
@@ -3712,6 +4063,9 @@ private:
             return;
         case 't': case 'T':
             trade();
+            return;
+        case 'k': case 'K':
+            openBankUI();
             return;
         case 'f': case 'F':
             message = "Find the furnace at home and press E beside it.";
@@ -3988,6 +4342,7 @@ private:
 
     // 由全屏 UI 的 100ms ticker 统一调用：推进电网+高炉+车床+处理链机器
     void globalTick100ms() {
+        investmentMarket.update();
         tickPowerGrid();
         furnace.update(player, 100);
         // Lathe：先扣 2 EU 并把结果写进 hasPowerThisTick 字段，
@@ -4744,7 +5099,8 @@ public:
             if (cfRef.getAnimState() == Centrifuge::Spinning) {
                 stateStr = cfRef.getHasPowerThisTick() ? "SPINNING" : "PAUSED (no power)";
                 barCol = cfRef.getHasPowerThisTick() ? Color::Magenta : Color::Red;
-            } else if (cfRef.getAnimState() == Centrifuge::Done) {
+            }
+            else if (cfRef.getAnimState() == Centrifuge::Done) {
                 stateStr = "DONE";
                 barCol = Color::Green;
             }
@@ -4796,8 +5152,8 @@ public:
                 buttons->Render() | center,
                 separator(),
                 text(statusMsg) | color(Color::Green),
-            }) | border | size(WIDTH, GREATER_THAN, 86);
-        });
+                }) | border | size(WIDTH, GREATER_THAN, 86);
+            });
 
         atomic<bool> uiRunning{ true };
         view = view | CatchEvent([&](Event e) {
@@ -4847,7 +5203,7 @@ public:
             showMessage();
 
             setcolor(COLOR_GREY);
-            cout << "\n  [WASD Move] [E Interact] [C Backpack] [T Trade] [B Build] [J Quests] [F Hint] [H Help] [P Save] [L Load] [Q Quit]\n";
+            cout << "\n  [WASD Move] [E Interact] [C Backpack] [T Trade] [K Bank] [B Build] [J Quests] [F Hint] [H Help] [P Save] [L Load] [Q Quit]\n";
             setcolor(COLOR_RESET);
 
             int key = _getch();
@@ -4900,11 +5256,12 @@ int main() {
 
 
 // ============== THE END ===================
-// 这是一个留言板，欢迎你在下方留下你想说的
+// 这是一个便携留言板，欢迎你在下方留下你想说的
 // 
 // 2026-8-25 19:13(UTC+8:00) CodeJ-40404
-// > 这是一个示范
+// EXAMPLE hahaha
+// hi
 // > Location : China
 // 
 // 
-// xxx
+// 
