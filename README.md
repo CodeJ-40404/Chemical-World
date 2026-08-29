@@ -1,7 +1,3 @@
-我来帮你更新 README，使其成为中英双语版本，并保持与当前代码（v5 存档格式、新机器等）同步。
-
----
-
 # Chemical-World
 
 [![C++](https://img.shields.io/badge/C++-20-blue.svg)](https://isocpp.org/)
