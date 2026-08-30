@@ -337,7 +337,7 @@ if (d == 'X' || d == 'x' || d == 'W' || d == 'w' || d == 'R' || d == 'r') return
 
 ---
 
-## IN English
+## English
 
 Thank you for your interest in Chemical-World! This guide will help you understand the project structure, development workflow, and contribution guidelines.
 
