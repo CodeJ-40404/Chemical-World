@@ -80,8 +80,8 @@ gear 75c · rod 60c · plate 54c · spring 90c · bolt 36c · wire 105c
 | Mid 中期 (200–1000c) | Furnace batches + lathe wire; processing chain | 高炉批量+车床 wire，上处理链 |
 | Late 后期 (>1000c) | **Electrolyzer chlor-alkali: 55c in → 200c out / 8 s** | **氯碱电解：55c 进 → 200c 出 / 8 秒** |
 
-**EN:** Full chemistry margin table: [Chemistry](Chemistry.md)#economy.
-**中文：** 化学收益全表：[化学系统](Chemistry.md)。
+**EN:** Full chemistry margin table: [Chemistry](Chemistry)#economy.
+**中文：** 化学收益全表：[化学系统](Chemistry)。
 
 ---
 
