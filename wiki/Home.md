@@ -4,7 +4,7 @@
 
 **中文：** 欢迎来到 **Chemical-World** 官方 Wiki！这是一个基于 C++20 + FTXUI 构建的终端工业化学沙盒游戏，灵感来自 GT:New Horizons 的简化电力网络与机器链。
 
-> **Current version / 当前版本：** v0.5.0 *Electrolysis Update* · save format **v7** · source single-file ~6,300 lines · release notes: [RELEASES.md](../RELEASES.md)
+> **Current version / 当前版本：** v1.3.2 *Electrolysis Update* · save format **v7** · source single-file ~6,300 lines · release notes: [RELEASES.md](../RELEASES.md)
 
 ---
 
