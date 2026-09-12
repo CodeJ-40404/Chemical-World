@@ -355,5 +355,5 @@ These were caught by the pre-release independent review and fixed before tagging
 | v0.3.0 | 2026-08 | Blast furnace rewrite & lathe（土高炉重写 + 车床） | v5 |
 | v0.1–v0.2 | — | Baseline: three maps, mining, quests, bank, save v2–v4（三地图/挖矿/任务/银行） | v2–v4 |
 
-> Version numbers pre-v0.5.0 are reconstructed from save-format history for reference; only v1.3.2 is formally tagged.
-> v0.5.0 之前的版本号依据存档格式沿革回溯标注，仅 v1.3.2 为正式打 tag 版本。
+> Version numbers pre-v1.3.2 are reconstructed from save-format history for reference; only v1.3.2 is formally tagged.
+> v1.3.2 之前的版本号依据存档格式沿革回溯标注，仅 v1.3.2 为正式打 tag 版本。
