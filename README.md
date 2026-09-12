@@ -3,11 +3,12 @@
 [![C++](https://img.shields.io/badge/C++-20-blue.svg)](https://isocpp.org/)
 [![FTXUI](https://img.shields.io/badge/FTXUI-6.1.9-green.svg)](https://github.com/ArthurSonzogni/FTXUI)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
-[![Save Format](https://img.shields.io/badge/save-v5-green.svg)](#存档系统)
+[![Save Format](https://img.shields.io/badge/save-v7-brightgreen.svg)](#存档系统)
+[![Release](https://img.shields.io/badge/release-v0.5.0%20Electrolysis-blueviolet.svg)](RELEASES.md)
 
-> A terminal-based interactive industrial sandbox game built with C++20 and FTXUI, inspired by a simplified power network and machine chain from GT:New Horizons. Mine ores → smelt in blast furnace → machine steel parts on lathe → sell for coins / assemble more machines. Build your industrial empire.
+> A terminal-based interactive industrial sandbox game built with C++20 and FTXUI, inspired by a simplified power network and machine chain from GT:New Horizons. Mine ores → smelt in blast furnace → machine steel parts on lathe → **electrolyze compounds into elements and synthesize chemicals** → sell for coins / assemble more machines. Build your industrial empire.
 >
-> 一个基于 C++20 和 FTXUI 构建的终端交互式工业沙盒游戏，灵感来自 GT:New Horizons 的简化电力网络与机器链。挖掘矿石 → 土高炉冶炼 → 车床加工钢零件 → 卖钱 / 装配更多机器，搭建自己的工业帝国。
+> 一个基于 C++20 和 FTXUI 构建的终端交互式工业沙盒游戏，灵感来自 GT:New Horizons 的简化电力网络与机器链。挖掘矿石 → 土高炉冶炼 → 车床加工钢零件 → **电解化合物得到元素并合成化学品** → 卖钱 / 装配更多机器，搭建自己的工业帝国。
 
 ---
 
@@ -20,11 +21,12 @@
 | **Blast Furnace**: 4-slot parallel smelting × 30s/batch × 24-frame ASCII animation (STOKING/HEATING/POURING), **no power required** | **土高炉**：4 槽并行冶炼 × 30s/批 × 24 帧 ASCII 动画（STOKING / HEATING / POURING 三阶段），**无需电力** |
 | **Lathe**: 6 steel part molds, 2 EU/tick power drain, auto-pauses without power | **车床**：6 种钢零件模具，加工中每 tick 扣 2 EU，无电自动暂停并等待恢复 |
 | **Processing chain**: Crusher (4 EU/slot) → Ore Washer (2 EU) → Centrifuge (8 EU), with byproducts | **处理链**：破碎机 (4 EU/槽) → 洗矿槽 (2 EU) → 离心机 (8 EU)，附带副产物 |
-| **Build mode**: B key opens 7×7 zoom grid, place generators/wires/machines/decor | **建造模式**：B 键打开 7×7 放大网格，放置发电机 / 电线 / 装饰 |
+| **Chemistry (v0.5.0)**: 15 elements, Electrolyzer `Z` (10 EU/t, water/alumina/molten-salt/chlor-alkali) and hand-powered Chemistry Bench `K` (5 syntheses), reversible element ⇄ compound loop | **化学系统 (v0.5.0)**：15 种元素、电解机 `Z`（10 EU/t，水电解/铝土/熔盐/氯碱）与不耗电的化合台 `K`（5 条合成），元素 ⇄ 化合物可逆闭环 |
+| **Build mode**: B key opens 7×7 zoom grid, place 10 objects: generators/wires/6 machine types/decor | **建造模式**：B 键打开 7×7 放大网格，放置 10 种对象：发电机 / 电线 / 6 种机器 / 装饰 |
 | **Trading market**: T key opens SELL/BUY dual-tab interface. BUY sells raw materials/steel parts/machine blueprints | **交易市场**：T 键打开 SELL/BUY 双标签界面，BUY 出售原材料 / 钢零件 / 机器蓝图 |
 | **Quest system**: Main/side quests with prerequisites, rewards, tracking, and claim mechanics | **任务系统**：主线/支线任务，前置条件、奖励、追踪与领取机制 |
 | **Bank & investment**: Buy/sell Gold and Bitcoin with dynamic price fluctuations | **银行与投资**：买卖黄金和比特币，价格动态波动 |
-| **Save system**: v5 binary format, backward compatible, 3 manual slots + autosave | **存档系统**：v5 二进制存档格式，向后兼容，3 个手动档位 + 自动档 |
+| **Save system**: v7 binary format, backward compatible (v2–v7), 3 manual slots + autosave | **存档系统**：v7 二进制存档格式，向后兼容（v2–v7），3 个手动档位 + 自动档 |
 
 ---
 
@@ -55,7 +57,7 @@
 
 ```
 Chemical-World/
-├── Chemical-World.cpp              # Single-file game source (~4500 lines) / 单文件游戏源码（约 4500 行）
+├── Chemical-World.cpp              # Single-file game source (~6300 lines) / 单文件游戏源码（约 6300 行）
 ├── Chemical-World.vcxproj          # VS project config / VS 项目配置
 ├── chemical_world_slot1.sav        # Manual save slot 1 / 手动存档槽 1
 ├── chemical_world_slot2.sav        # Manual save slot 2 / 手动存档槽 2
@@ -74,13 +76,14 @@ Chemical-World/
 | **Map System** / 地图系统 | `GameMap` class | Three areas, mineral generation, decorations, biome variants / 三区域，矿物生成、装饰、子群系变种 |
 | **Blast Furnace** / 土高炉 | `BlastFurnace` class | 4-slot parallel × 30s × 24-frame animation, no power / 4 槽并行 × 30s × 24 帧动画，无电力 |
 | **Lathe** / 车床 | `Lathe` class | 6 molds, 2 EU/tick power drain, pause without power / 6 模具，2 EU/tick 电力消耗，无电暂停 |
-| **Processing Chain** / 处理链 | `Crusher` / `OreWasher` / `Centrifuge` classes | Crush → Wash → Centrifuge, with byproducts / 破碎 → 洗矿 → 离心，附带副产物 |
+| **Processing Chain** / 处理链 | `Crusher` / `OreWasher` / `Centrifuge` / `OreSorter` classes | Crush → Wash → Centrifuge, with byproducts / 破碎 → 洗矿 → 离心，附带副产物 |
+| **Chemistry** / 化学系统 | `Electrolyzer` / `ChemistryBench` classes | 9 recipes, elements ⇄ compounds, 10 EU/t electrolysis / 9 配方，元素⇄化合物，电解 10 EU/t |
 | **Power Network** / 电力网络 | `tickPowerGrid` / `powerDraw` / `PowerGenerator` | BFS conductivity, EU pool injection/drain / BFS 导电性、EU pool 注入/扣减 |
-| **FTXUI Interfaces** / FTXUI 界面 | `FurnaceUI` / `LatheUI` / `TradeUI` / `BuildUI` / `GeneratorPanel` / `BankUI` | Fullscreen UI, Maybe gating, ticker threads / 全屏 UI、Maybe 门控、ticker 线程 |
+| **FTXUI Interfaces** / FTXUI 界面 | `FurnaceUI` / `LatheUI` / `TradeUI` / `BuildUI` / `GeneratorPanel` / `BankUI` / `openElectrolyzerUI` / `openChemBenchUI` | Fullscreen UI, Maybe gating, ticker threads / 全屏 UI、Maybe 门控、ticker 线程 |
 | **Quest System** / 任务系统 | `QuestManager` class | JSON config, prerequisites, conditions, rewards, tracking / JSON 配置、前置条件、条件、奖励、追踪 |
-| **Build System** / 建造系统 | `openBuildUI` / `placeGenerator` / `placeWire` / `placeDecor` / `placeCrusher` / `placeWasher` / `placeCentrifuge` | 7×7 zoom grid, blueprint validation, space check / 7×7 放大网格、蓝图校验、空间校验 |
+| **Build System** / 建造系统 | `openBuildUI` / `placeGenerator` / `placeWire` / `placeCrusher` / `placeWasher` / `placeCentrifuge` / `placeSorter` / `placeElectrolyzer` / `placeChemBench` | 7×7 zoom grid, blueprint validation, space check / 7×7 放大网格、蓝图校验、空间校验 |
 | **Trading System** / 交易系统 | `TradeUI` class | SELL/BUY dual-tab, blueprints one-time unlock, price = sell × 3 / SELL/BUY 双标签、蓝图一次性解锁、定价 = 售价 × 3 |
-| **Save System** / 存档系统 | `saveGame` / `loadGame` | v5 format (v2–v4 compatible), 3 manual + autosave / v5 格式（v2–v4 兼容）、3 手动档 + autosave |
+| **Save System** / 存档系统 | `saveGame` / `loadGame` | v7 format (v2–v7 compatible), 3 manual + autosave / v7 格式（v2–v7 兼容）、3 手动档 + autosave |
 
 ---
 
@@ -160,16 +163,19 @@ Output: `d:\c++\repos\Chemical-World\Chemical-World\x64\Debug\Chemical-World.exe
 - [x] **Blast Furnace rewrite**: 4-slot × 30s × 24-frame ASCII animation, no power / **土高炉重写**：4 槽并行 × 30s × 24 帧 ASCII 动画，无需电力
 - [x] **Lathe**: 6 molds + machining animation + power drain (pause without power) / **车床系统**：6 模具 + 加工动画 + 电力消耗（无电暂停）
 - [x] **Processing chain**: Crusher / Washer / Centrifuge with byproducts / **处理链**：破碎机 / 洗矿槽 / 离心机，附带副产物
+- [x] **Gem Sorter**: grade-based gem sorting side branch / **宝石筛选机**：按等级筛选宝石的支线
+- [x] **Electrolysis Update (v0.5.0)**: 15 elements, Electrolyzer + Chemistry Bench, 9 real reactions, save v7 / **电解更新 (v0.5.0)**：15 种元素、电解机 + 化合台、9 条真实反应、存档 v7
 - [x] **Power network**: Thermal generators + wire BFS + EU pool (0~10000) / **电力网络**：火力发电机 + 电线 BFS + EU pool（0~10000）
 - [x] **Build mode**: B key 7×7 zoom grid, generators/wires/machines/decor / **建造模式**：B 键 7×7 放大网格，发电机 / 电线 / 装饰
 - [x] **Trading market**: SELL/BUY dual-tab + blueprints one-time unlock / **交易市场**：SELL/BUY 双标签 + 蓝图一次性解锁
 - [x] **Quest system**: Main/side quests, prerequisites, tracking, claiming / **任务系统**：主线/支线任务、前置条件、追踪与领取
 - [x] **Bank & investment**: Gold/BTC trading with dynamic prices / **银行与投资**：黄金/比特币交易，动态价格
-- [x] **Save system**: v5 format (v2–v4 compatible) + 3 manual + autosave / **存档系统**：v5 格式（v2–v4 兼容）+ 3 手动档 + autosave
+- [x] **Save system**: v7 format (v2–v7 compatible) + 3 manual + autosave / **存档系统**：v7 格式（v2–v7 兼容）+ 3 手动档 + autosave
 - [x] Experience & level system / 经验值与等级系统
 
 ### Planned / 规划中
-- [ ] More machines: Compressor / Chemical Reactor / Electrolyzer / 更多机器：压缩机 / 化学反应釜 / 电解机
+- [ ] More machines: Compressor / Chemical Reactor / 更多机器：压缩机 / 化学反应釜
+- [ ] Chemistry depth: production sources for sulfur/C/N/Mg/Si, sulfide ores, gas separation / 化学深化：硫/C/N/Mg/Si 的获取途径、硫化矿、气体分离
 - [ ] Fluid pipes: Water / Oil / Chemical solution transport / 流体管道：水 / 油 / 化学溶液运输
 - [ ] Multi-recipe extension: Dynamic recipe registration / 多配方扩展：动态配方注册机制
 - [ ] AI merchants: NPC trading logic with price fluctuations / AI 商人：基于价格波动的 NPC 交易逻辑
@@ -200,12 +206,15 @@ To become a massive hardcore game integrating industry, chemistry, and space exp
   - [Home](https://github.com/CodeJ-40404/Chemical-World/wiki) — Wiki home & index / Wiki 首页与索引
   - [Gameplay-Basics](https://github.com/CodeJ-40404/Chemical-World/wiki/Gameplay-Basics) — Gameplay basics / 玩法基础
   - [Power-System](https://github.com/CodeJ-40404/Chemical-World/wiki/Power-System) — Power system details / 电力系统详解
-  - [Machines](https://github.com/CodeJ-40404/Chemical-World/wiki/Machines) — Machines (Furnace/Lathe/Generator/Processing) / 机器（高炉/车床/发电机/处理链）
+  - [Machines](https://github.com/CodeJ-40404/Chemical-World/wiki/Machines) — All machines (Furnace/Lathe/Processing/Chemistry) / 机器总览
+  - [Chemistry](https://github.com/CodeJ-40404/Chemical-World/wiki/Chemistry) — Elements, compounds, recipes & economy / 元素、化合物、配方与经济
   - [Trading-Market](https://github.com/CodeJ-40404/Chemical-World/wiki/Trading-Market) — Trading market / 交易市场
   - [Build-Mode](https://github.com/CodeJ-40404/Chemical-World/wiki/Build-Mode) — Build mode / 建造模式
-  - [Quest-System](https://github.com/CodeJ-40404/Chemical-World/wiki/Quest-System) — Quest system / 任务系统
-  - [Save-System](https://github.com/CodeJ-40404/Chemical-World/wiki/Save-System) — Save system / 存档系统
+  - [Save-System](https://github.com/CodeJ-40404/Chemical-World/wiki/Save-System) — v7 save format / v7 存档系统
   - [Controls](https://github.com/CodeJ-40404/Chemical-World/wiki/Controls) — Complete key bindings / 按键完整列表
+  - [Proposal-Standard](https://github.com/CodeJ-40404/Chemical-World/wiki/Proposal-Standard) — Feature proposal standard / 提案标准
+  - [Join-Us](https://github.com/CodeJ-40404/Chemical-World/wiki/Join-Us) — Contributing roles & good first issues / 加入我们
+- **Release notes / 发布说明**: [RELEASES.md](RELEASES.md)
 
 ---
 

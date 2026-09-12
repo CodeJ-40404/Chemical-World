@@ -1,178 +1,151 @@
-# Machines
+# Machines / 机器
 
-机器详解：土高炉、车床、火力发电机。
+> **EN:** All machines except the Blast Furnace and Lathe (pre-placed at Home) are built via the Build menu (`B`) after buying a one-time blueprint. Powered machines need wire connection to a burning generator — see [Power System](Power-System.md).
+> **中文：** 除土高炉与车床（家园预置）外，所有机器都需在 `T` 购买一次性蓝图后，通过 `B` 建造菜单放置。耗电机器必须用电线连到燃烧中的发电机——见[电力系统](Power-System.md)。
+
+## Machine roster / 机器总览
+
+| Char / 字符 | Machine / 机器 | Footprint / 占地 | BP / 蓝图 | Place / 放置 | Power / 耗电 |
+|---|---|---|---|---|---|
+| `F`/`f` | Blast Furnace 土高炉 | 2×2 | pre-built 预置 | — | none 无 |
+| `L`/`l` | Lathe 车床 | 2×2 | pre-built 预置 | — | 2 EU/tick |
+| `G`/`g` | Thermal Generator 火力发电机 | 2×2 | 150c | 100c | produces 8 EU/t 发电 |
+| `+` | Wire 电线 | 1×1 | 50c | 5c | conductor 导体 |
+| `X`/`x` | Crusher 破碎机 | 2×2 | 200c | 150c | 4 EU/active slot 每活跃槽 |
+| `W`/`w` | Ore Washer 洗矿槽 | 2×2 | 160c | 120c | 2 EU/tick |
+| `R`/`r` | Centrifuge 离心机 | 2×2 | 250c | 200c | 8 EU/tick |
+| `S`/`s` | Gem Sorter 宝石筛选机 | 2×2 | 220c | 180c | 6 EU/tick |
+| `Z`/`z` | **Electrolyzer 电解机** | 2×2 | **300c** | **250c** | **10 EU/tick** |
+| `K`/`k` | **Chemistry Bench 化合台** | 2×2 | **180c** | **120c** | **none 无** |
+
+> **EN / 中文：** Every 2×2 machine uses an uppercase anchor + three lowercase helper tiles; only the anchor is stored in `machineMeta` and matched by `E`.
+> 所有 2×2 机器使用大写锚点 + 三个小写辅助格；只有锚点写入 `machineMeta` 并被 `E` 键匹配。
 
 ---
 
-## 🔥 土高炉（BlastFurnace, F）
+## 🔥 Blast Furnace / 土高炉（F）
 
-**位置**：家园 (5,5) 2×2 区域（`F` 锚点 + `f` 三辅助格）
+**EN:** Pre-placed at Home (5,5). 4 parallel slots, 30 s per batch, 24-frame ASCII animation (STOKING → HEATING → POURING), **no power required**.
 
-### 关键特性
+**中文：** 预置在家园 (5,5)。4 槽并行，每批 30 秒，24 帧 ASCII 动画（STOKING 铲煤 → HEATING 烧炼 → POURING 倾倒），**无需电力**。
 
-| 属性 | 数值 |
+| Property / 属性 | Value / 数值 |
 |------|------|
-| 槽数 | 4（并行） |
-| 每批耗时 | 30 秒（30000 ms） |
-| 电力需求 | **无** |
-| 动画 | 24 帧 ASCII（STOKING / HEATING / POURING 三阶段） |
-| 字符 | `F` 红色 / `f` 暗红 |
-| 通行 | 不可通行 |
+| Slots / 槽数 | 4 parallel / 并行 |
+| Time / 每批 | 30 s (30,000 ms) |
+| Recipe cost / 配方消耗 | 2 ore + 1 coal (consumed inside `update`) / 2 矿石 + 1 煤 |
+| Chars / 字符 | `F` bright red 亮红 / `f` dark red 暗红 |
 
-### 配方表（8 种）
+### Recipes / 配方（8）
 
-| 配方名 | 输入 ×2 | 输出 | 输出数量 |
-|--------|--------|------|---------|
-| Steel Making | hematite | steel | 1 |
-| Steel Making | magnetite | steel | 1 |
-| Aluminum Smelt | bauxite | aluminum | 1 |
-| Tin Smelting | cassiterite | tin | 1 |
-| Copper Smelt | malachite | copper | 1 |
-| Copper Smelt | chalcopyrite | copper | 1 |
-| Gold Smelting | gold_ore | gold_ingot | 1 |
-| Silver Smelt | silver_ore | silver_ingot | 1 |
+| Recipe / 配方 | Input ×2 / 输入 | Output / 输出 |
+|--------|--------|------|
+| Steel Making | hematite / magnetite | steel ×1 |
+| Aluminum Smelt | bauxite | aluminum ×1 |
+| Tin Smelting | cassiterite | tin ×1 |
+| Copper Smelt | malachite / chalcopyrite | copper ×1 |
+| Gold Smelting | gold_ore | gold_ingot ×1 |
+| Silver Smelt | silver_ore | silver_ingot ×1 |
 
-> 每个配方需要 **2 个矿石 + 1 个 coal**（在 `update()` 内部消耗，UI 显示为配方名）
-
-### 24 帧动画分段
-
-```
-progress 0%  ───────── 33% ─────────── 83% ─────── 100%
-            STOKING 0-5      HEATING 6-17    POURING 18-23
-            (铲煤入炉)         (烧炼)          (倒铁水)
-```
-
-- 帧 0-5：工人铲煤动作（`\\ /` `>#<` `/[\` 等）
-- 帧 6-17：炉内火焰渐强（`*` `**` `***` 渐多）
-- 帧 18-23：铁水倾倒（`~~~` 流出）
-- DONE 状态：停在第 23 帧
-
-### 操作流程
-
-1. 按 `E` 在 F 旁打开 FurnaceUI
-2. 顶部 4 个 Radiobox 切换槽（Slot 0-3）
-3. 左侧 Menu 选 8 种配方之一
-4. 点 `LOAD SLOT` 把当前槽装载该配方
-5. 自动开始 30s 烧炼
-6. 完成后点 `COLLECT` 取走产物
-7. `CANCEL SLOT` 中止当前槽
-8. 4 槽独立运行，可同时烧 4 种不同金属
-
-> 💡 30s × 4 槽并行 = 平均 7.5s / 件，比 C 合成快得多。
+**EN:** UI (`E` nearby): slot radiobox → recipe menu → LOAD SLOT → auto smelt → COLLECT; CANCEL SLOT aborts. 4 slots run independently.
+**中文：** 机器旁按 `E`：槽 Radiobox → 配方 Menu → LOAD SLOT → 自动烧炼 → COLLECT；CANCEL SLOT 中止。4 槽独立运行。
 
 ---
 
-## ⚙️ 车床（Lathe, L）
+## ⚙️ Lathe / 车床（L）
 
-**位置**：家园 (8,5) 2×2 区域（`L` 锚点 + `l` 三辅助格）
+**EN:** Pre-placed at Home (8,5). Machines 6 steel-part molds; draws 2 EU/tick while Inserting/Machining and auto-pauses (progress retained) without power.
 
-### 关键特性
+**中文：** 预置在家园 (8,5)。6 种钢零件模具；Inserting/Machining 状态每 tick 扣 2 EU，无电自动暂停（保留进度）。
 
-| 属性 | 数值 |
+| Mold / 模具 | Input / 输入 | Output / 输出 | Time / 耗时 | XP | Sell / 售价 |
+|------|------|------|------|------|------|
+| Gear | steel ×1 | steel_gear ×1 | 3.0s | +12 | 25c |
+| Rod | steel ×1 | steel_rod ×1 | 2.5s | +10 | 20c |
+| Plate | steel ×1 | steel_plate ×1 | 2.0s | +8 | 18c |
+| Spring | steel ×1 | steel_spring ×1 | 3.5s | +14 | 30c |
+| Bolt | steel ×1 | steel_bolt ×2 | 1.5s | +6 | 12c |
+| Wire | steel ×1 | steel_wire ×3 | 4.0s | +16 | 35c |
+
+**State machine / 状态机：** `Idle → Inserting (5 frames) → Machining → Done → (COLLECT) → Idle`
+
+---
+
+## ⚡ Thermal Generator / 火力发电机（G）
+
+| Property / 属性 | Value / 数值 |
 |------|------|
-| 模具数 | 6 |
-| 电力需求 | **2 EU / tick**（Machining + Inserting 状态） |
-| 字符 | `L` 紫色 / `l` 暗紫 |
-| 通行 | 不可通行 |
+| Cost / 成本 | BP 150c one-time + 100c per unit / 蓝图一次性 150c + 每台 100c |
+| Per coal / 每煤 | 6,400 EU injected into the shared pool / 注入共享池 |
+| Burn rate / 燃烧速度 | 8 EU/tick (100 ms) → 80 s per coal / 每煤 80 秒 |
+| Chars / 字符 | `G` bright yellow / `g` dark yellow |
 
-### 模具表
-
-| 模具 | 输入 | 输出 | 输出量 | 耗时 | 经验 | 售价 |
-|------|------|------|--------|------|------|------|
-| Gear | steel ×1 | steel_gear | 1 | 3.0s | +12 | 25c |
-| Rod | steel ×1 | steel_rod | 1 | 2.5s | +10 | 20c |
-| Plate | steel ×1 | steel_plate | 1 | 2.0s | +8 | 18c |
-| Spring | steel ×1 | steel_spring | 1 | 3.5s | +14 | 30c |
-| Bolt | steel ×1 | steel_bolt | 2 | 1.5s | +6 | 12c |
-| Wire | steel ×1 | steel_wire | 3 | 4.0s | +16 | 35c |
-
-### 状态机
-
-```
-Idle ──LOAD──> Inserting (5 帧 / ~1s) ──> Machining ──完成──> Done
-   ▲                                                          │
-   └───────────────────COLLECT─────────────────────────────────┘
-```
-
-- **Idle**：显示选中模具的 icon
-- **Inserting**：钢条 `[====]` 从左滑入卡盘（5 帧）
-- **Machining**：加工动画循环（铁屑 + 火花 4 帧循环，200ms/帧）
-- **Done**：显示 "JOB COMPLETE"，按 COLLECT 取产物
-
-### 电力消耗
-
-- Machining / Inserting 状态每 tick（100ms）扣 2 EU
-- 没扣到 → `hasPowerThisTick = false`
-- 车床自动暂停：`isRunning = false`，进度条变灰，显示 ⚠ PAUSED (no power)
-- 恢复供电 → 自动恢复加工，日志显示 ⚡ Power restored
-
-### 操作流程
-
-1. 走到 L 旁按 `E` 打开 LatheUI
-2. Idle 状态下左侧选模具
-3. 点 `LOAD` 装载（消耗 1 个 steel）
-4. 自动进入 Inserting → Machining
-5. 期间发电机必须有电
-6. 完成后点 `COLLECT` 取走产物
-7. `CANCEL` 中止加工
+**EN:** `E` nearby opens GeneratorPanel → ADD 1 COAL (consumes 1 backpack coal, `burnEU += 6400`). Multiple burning generators stack injection; the pool caps at 10,000 EU.
+**中文：** 旁按 `E` 打开 GeneratorPanel → ADD 1 COAL（消耗背包 1 煤，`burnEU += 6400`）。多台燃烧发电机注入叠加；EU 池上限 10,000。
 
 ---
 
-## ⚡ 火力发电机（PowerGenerator, G）
+## 🧱 Processing chain / 处理链（X → W → R）
 
-**位置**：玩家通过 B 键建造模式放置（需要 Generator Blueprint）
+**EN:** Player-built powered chain that upgrades raw ore. Each machine has its own recipe table, animation and per-slot/pause semantics modeled on the Lathe.
 
-### 关键特性
+**中文：** 玩家自建的耗电处理链，用于升级原矿。每台机器有独立配方表、动画与每槽/暂停语义，模式同车床。
 
-| 属性 | 数值 |
-|------|------|
-| 尺寸 | 2×2 格 |
-| 单价 | 100 coins（不含蓝图） |
-| 蓝图价格 | 150 coins（一次性，BUY tab 购买） |
-| 单煤发电 | 6400 EU |
-| 燃烧速度 | 8 EU / tick |
-| 单煤燃烧时间 | 80 秒 |
-| 字符 | `G` 黄色 / `g` 暗黄 |
-| 通行 | 不可通行 |
+| Order / 顺序 | Machine / 机器 | Power / 耗电 | Role / 作用 |
+|------|------|------|------|
+| 1 | **Crusher `X`** (yellow / 黄) | 4 EU per active slot / 每活跃槽 | Ore → crushed ore + gravel / 矿石→碎矿+砾石 |
+| 2 | **Ore Washer `W`** (cyan / 青) | 2 EU/tick | Crushed ore → purified ore + byproducts / 碎矿→净化矿+副产 |
+| 3 | **Centrifuge `R`** (purple / 紫) | 8 EU/tick | Purified ore → dust (e.g. `bauxite_dust`, 22c) + byproducts / 净化矿→矿粉（如 `bauxite_dust`）+ 副产 |
 
-### 状态
+**Branch / 支线：** **Gem Sorter `S`** (white/grey 白/灰, 6 EU/tick) sorts crushed gems by grade for "surprise output" gems.
 
-- **BURNING**：`burnEU > 0`，每 tick 注入 ≤8 EU 到 pool，`active = true`
-- **IDLE**：`burnEU = 0`，`active = false`
-
-### GeneratorPanel（E 键打开）
-
-显示：
-- 剩余燃烧 EU 数值条（40 段，满 = 6400）
-- 状态：BURNING（绿）/ IDLE（红）
-- `ADD 1 COAL` 按钮：消耗背包 1 个 coal，`burnEU += 6400`
-- `CLOSE` 按钮
+> **EN / 中文：** `bauxite_dust` from the Centrifuge is the feedstock for the Electrolyzer's alumina recipe — the processing chain feeds directly into chemistry.
+> 离心机产出的 `bauxite_dust`（铝土粉，22c）正是电解机铝土配方的原料——处理链直接对接化学系统。
 
 ---
 
-## 📐 机器 2×2 锚点约定
+## 🧪 Chemistry machines / 化学机器（Z, K） ⭐ v0.5.0
 
-所有 2×2 机器使用 **大写字母锚点 + 小写辅助格** 约定：
+### Electrolyzer / 电解机（`Z`/`z`, cyan / 青色）
+
+**EN:** 10 EU/tick (800 EU per 8 s run), BP 300c + 250c placement. Breaks compounds into elements with multi-product output; pauses unpowered. 4 recipes: water, alumina, molten salt, chlor-alkali.
+
+**中文：** 10 EU/tick（8 秒/次，共 800 EU），蓝图 300c + 放置 250c。将化合物分解为元素，支持多产物；断电暂停。4 条配方：水、铝土、熔盐、氯碱。
+
+### Chemistry Bench / 化合台（`K`/`k`, green / 绿色）
+
+**EN:** No power, instant craft, BP 180c + 120c placement. 5 recipes recombine elements into water, salt, NaOH, CuSO₄, FeS; the UI shows live have/need per input.
+
+**中文：** 不耗电、即时合成，蓝图 180c + 放置 120c。5 条配方将元素合成为水、盐、NaOH、CuSO₄、FeS；界面实时显示每种输入的 have/need。
+
+➡️ **Full recipes, element tables and economy math: [Chemistry](Chemistry.md)**
+➡️ **完整配方、元素表与经济计算：[化学系统](Chemistry.md)**
+
+---
+
+## 📐 2×2 anchor convention / 2×2 锚点约定
 
 ```
-F f     L l     G g
-F f     L l     G g
-↑       ↑       ↑
-锚点     锚点     锚点
-(左上)  (左上)  (左上)
+F f     L l     G g     X x     Z z     K k
+F f     L l     G g     X x     Z z     K k
+↑ anchor (top-left), stored in machineMeta / 锚点（左上），存入 machineMeta
 ```
 
-- 锚点（左上格）使用大写字母 `F/L/G`，机器元信息 `machineMeta` 只记录锚点坐标
-- 其余 3 格使用小写 `f/l/g`，仅作显示
-- `isNear(x, y, 'F', px, py)` 只匹配大写锚点，避免误判
-- 电线 `+` 是 1×1，没有锚点概念
+- **EN:** Helpers are display-only; `isNear(...,'F',...)` matches the uppercase anchor only; wires `+` are 1×1 with no anchor.
+- **中文：** 辅助格仅用于显示；`isNear(...,'F',...)` 只匹配大写锚点；电线 `+` 为 1×1，无锚点。
+- **EN:** Default new-game layout: `F` (5,5), `L` (8,5); everything else is player-built.
+- **中文：** 新游戏默认布局：`F` (5,5)、`L` (8,5)；其余全部由玩家建造。
 
-### 默认布局（新游戏）
+---
 
-```
-machineMeta = [
-    { x:5, y:5, type:'F' },  // BlastFurnace
-    { x:8, y:5, type:'L' },  // Lathe
-]
-generators = {}  // 玩家需自己建造
-```
+## FAQ / 常见问题
+
+**EN:**
+- *Machine shows PAUSED?* Generator out of coal or wire path broken — BFS needs 4-connected tiles all the way to the anchor.
+- *Can machines be removed?* Not yet — placement is permanent.
+- *Do machines save?* Machine state is rebuilt from `machineMeta` + tile rehydration on load; EU/blueprints persist in the v7 save.
+
+**中文：**
+- *机器显示 PAUSED？* 发电机缺煤或电线断了——BFS 需要一路 4 邻接通到锚点。
+- *机器能拆吗？* 暂不支持，放置即永久。
+- *机器会存档吗？* 加载时由 `machineMeta` + 瓦片 rehydration 重建；EU/蓝图在 v7 存档中持久化。

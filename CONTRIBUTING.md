@@ -32,12 +32,12 @@
 | UI 框架 | FTXUI 6.1.9 | 终端渲染（Menu / Radiobox / Button / Renderer） |
 | 平台 | Windows 10/11 | 依赖 `windows.h` 控制台 API（颜色/光标） |
 | 构建 | MSVC 2022 | VS 项目 `.vcxproj` + MSBuild |
-| 序列化 | 自定义二进制格式 | v3/v4/v5 向后兼容 |
+| 序列化 | 自定义二进制格式 | v2–v7 向后兼容（当前 v7） |
 | 存档扩展 | JSON（任务进度） | 使用 `nlohmann/json` |
 
 #### 核心设计原则
 
-1. **单文件架构**：所有游戏逻辑集中于 `Chemical-World.cpp`（~3100 行），便于分发和编译
+1. **单文件架构**：所有游戏逻辑集中于 `Chemical-World.cpp`（~6300 行），便于分发和编译
 2. **FTXUI 全屏模式**：所有复杂界面均使用 `ScreenInteractive::Fullscreen()` + `Loop()`
 3. **100ms 心跳 tick**：`globalTick100ms()` 驱动机器进度、电网刷新、市场更新
 4. **存档向后兼容**：新增字段时保留旧版读取逻辑，版本号递增
@@ -326,8 +326,9 @@ Renderer(buttons, [&] { ... });
 
 **A**: 在 `tickPowerGrid()` 的 `isConductive` lambda 中添加：
 ```cpp
-if (d == 'X' || d == 'x' || d == 'W' || d == 'w' || d == 'R' || d == 'r') return true;
+if (d == 'Z' || d == 'z') return true;   // 同时在 poweredMachines 注册循环加 m.type == 'Z'
 ```
+> 新玩法系统提案请先遵循 [wiki/Proposal-Standard.md](wiki/Proposal-Standard.md)。
 
 ---
 
@@ -365,12 +366,12 @@ Thank you for your interest in Chemical-World! This guide will help you understa
 | UI Framework | FTXUI 6.1.9 | Terminal rendering (Menu / Radiobox / Button / Renderer) |
 | Platform | Windows 10/11 | Depends on `windows.h` console API (colors/cursor) |
 | Build System | MSVC 2022 | VS project `.vcxproj` + MSBuild |
-| Serialization | Custom binary format | v3/v4/v5 backward compatible |
+| Serialization | Custom binary format | v2–v7 backward compatible (current v7) |
 | Save Extension | JSON (quest progress) | Uses `nlohmann/json` |
 
 #### Core Design Principles
 
-1. **Single-file Architecture**: All game logic in `Chemical-World.cpp` (~3100 lines) for easy distribution and compilation
+1. **Single-file Architecture**: All game logic in `Chemical-World.cpp` (~6,300 lines) for easy distribution and compilation
 2. **FTXUI Fullscreen Mode**: All complex UI uses `ScreenInteractive::Fullscreen()` + `Loop()`
 3. **100ms Heartbeat Tick**: `globalTick100ms()` drives machine progress, grid refresh, and market updates
 4. **Backward Compatible Saves**: Keep old version read logic when adding new fields; increment version number
@@ -659,8 +660,9 @@ Renderer(buttons, [&] { ... });
 
 **A**: Add to `isConductive` lambda in `tickPowerGrid()`:
 ```cpp
-if (d == 'X' || d == 'x' || d == 'W' || d == 'w' || d == 'R' || d == 'r') return true;
+if (d == 'Z' || d == 'z') return true;   // also add m.type == 'Z' to the poweredMachines loop
 ```
+> For new gameplay systems, follow [wiki/Proposal-Standard.md](wiki/Proposal-Standard.md) first.
 
 ---
 
@@ -668,4 +670,4 @@ Thank you again for your contribution! May your code 🧪 be stable, ⚡ efficie
 
 ---
 
-*Last updated: 2026-08-30*
+*Last updated: 2026-09-12*

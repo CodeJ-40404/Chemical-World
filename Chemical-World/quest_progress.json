@@ -19,8 +19,10 @@
     },
     "side_coal": {
       "lifetime": 0,
-      "state": "[DONE]"
+      "state": "[....]"
     }
   },
-  "tracked": []
+  "tracked": [
+    "main_1_1"
+  ]
 }

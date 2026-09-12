@@ -1,110 +1,113 @@
-# Gameplay Basics
+# Gameplay Basics / 玩法基础
 
-新手玩法指南。
+> **EN:** New-player guide: spawn, the three maps, mining, crafting, progression.
+> **中文：** 新手指南：出生、三大地图、挖矿、合成与成长路线。
 
 ---
 
-## 🌍 出生与地图
+## 🌍 Spawn & maps / 出生与地图
 
-新游戏开始时玩家出生在 **家园** `(10, 5)`，初始物品：
+**EN:** A new game spawns you at **Home (10,5)** with:
+**中文：** 新游戏出生在**家园 (10,5)**，初始物品：
 
-| 物品 | 数量 | 用途 |
+| Item / 物品 | Qty / 数量 | Purpose / 用途 |
 |------|------|------|
-| water | 5 | 备用（暂未深度使用） |
-| coal | 5 | 高炉燃料 / 发电机燃料 |
-| sand | 3 | 合成 glass（C 合成菜单） |
+| water | 5 | Chemistry feedstock (BASIC / RAW tab) / 化学原料（BASIC / RAW 页） |
+| coal | 5 | Furnace & generator fuel / 高炉与发电机燃料 |
+| sand | 3 | Sellable raw material (glass is bought at the market) / 可卖原料（glass 在市场购买） |
 
-### 三大地图
-
-| 区域 | 尺寸 | 入口 | 特点 |
+| Area / 区域 | Size / 尺寸 | Entry / 入口 | Features / 特点 |
 |------|------|------|------|
-| **家园 (Home)** | 60×50 | 起始位置 | 含河流、湖泊、花草装饰、土高炉、车床、Car |
-| **荒原 (Wasteland)** | 150×80 | 走到 Car 旁按 `E` | 矿物分布广泛，含矿洞入口 `O` |
-| **矿洞 (Cave)** | 45×28 | 荒原中心 `O` 按 `E` | 密集矿石，可挖回荒原 |
+| **Home 家园** | 60×50 | spawn 出生 | River/lake, flowers, Furnace `F` (5,5), Lathe `L` (8,5), Car `C` / 河流湖泊、高炉、车床、Car |
+| **Wasteland 荒原** | 150×80 | `E` at the Car | 8 biomes, widespread ores, cave entrance `O` / 8 群系、矿石、矿洞入口 |
+| **Cave 矿洞** | 45×28 | `E` at `O` in Wasteland | Dense ores; exit via `O` / 密集矿石，`O` 离开 |
 
-### 家园固定布局
+**EN:** Fixed Home layout:
+**中文：** 家园固定布局：
 
 ```
-                  (5,5)         (8,5)
-                  ┌──┐ F Furnace ┌──┐ L Lathe
-                  │Ff│           │Ll│
-                  └──┘           └──┘
-                                          ← 玩家出生 (10,5)
-              Car (12,5)
-              ─── 走过去按 E 去荒原
+F Furnace (5,5)     L Lathe (8,5)        @ spawn (10,5)      C Car (12,5)
 ```
 
-- **F**（2×2）：土高炉，按 `E` 旁边打开 FurnaceUI
-- **L**（2×2）：车床，按 `E` 旁边打开 LatheUI（**需要电力**）
-- **C**：Car，按 `E` 在家园 / 荒原间切换
-
-### 装饰元素（自动生成）
-
-新游戏时家园会自动散布：
-
-| 元素 | 字符 | 数量 | 颜色 | 可通行 |
-|------|------|------|------|--------|
-| 河流 | `~` | ≥10 格长条 | 蓝色 | 否 |
-| 湖泊 | `~` | 3×5 = 15 格 | 深青色 | 否 |
-| 花朵 | `*` | 40 朵 | 紫 / 黄 / 绿随机 | 是 |
-| 草丛 | `v` | 30 丛 | 深绿色 | 是 |
+**EN:** Decor generated at Home: rivers/lakes `~` (impassable), 40 flowers `*`, 30 grass tufts `v` (both passable).
+**中文：** 家园自动生成：河流/湖泊 `~`（不可通行）、40 朵花 `*`、30 丛草 `v`（均可通行）。
 
 ---
 
-## ⛏️ 挖矿
+## ⛏️ Mining / 挖矿
 
-1. 在荒原或矿洞找到带矿物的格子（颜色不同于普通地面）
-2. 走到它**正旁边**（上下左右 4 邻接，非对角）
-3. 按 `E`，矿物会被敲击一次
-4. **每块矿物需要敲 3 次** 才能挖出
-5. 挖出后自动入背包
+**EN:** Find an ore tile in Wasteland/Cave, stand orthogonally adjacent, press `E` — each ore needs **3 hits**, then drops into the backpack.
+**中文：** 在荒原/矿洞找到矿石，站到上下左右相邻格按 `E`——每块矿需**敲 3 次**，产物自动入背包。
 
-### 矿物表
-
-| 矿物 | 售价 | 冶炼产物 |
+| Ore / 矿物 | Sell / 售价 | Smelts to / 冶炼产物 |
 |------|------|----------|
-| hematite（赤铁矿） | 5c | steel |
-| magnetite（磁铁矿） | 5c | steel |
-| bauxite（铝土矿） | 4c | aluminum |
-| cassiterite（锡石） | 5c | tin |
-| malachite（孔雀石） | 6c | copper |
-| chalcopyrite（黄铜矿） | 6c | copper |
-| gold_ore（金矿） | 20c | gold_ingot |
-| silver_ore（银矿） | 12c | silver_ingot |
-| coal（煤） | 8c | 直接用，无需冶炼 |
-| sand（沙） | 2c | 合成 glass |
+| hematite 赤铁矿 | 5c | steel |
+| magnetite 磁铁矿 | 5c | steel |
+| bauxite 铝土矿 | 4c | aluminum |
+| cassiterite 锡石 | 5c | tin |
+| malachite 孔雀石 | 6c | copper |
+| chalcopyrite 黄铜矿 | 6c | copper |
+| gold_ore 金矿 | 20c | gold_ingot |
+| silver_ore 银矿 | 12c | silver_ingot |
+| coal 煤 | 6c | used directly / 直接使用 |
+| sand 沙 | 1c | glass |
 
 ---
 
-## 🔨 合成（C 键）
+## 🏭 Processing chains / 加工链
 
-按 `C` 打开合成菜单，目前支持：
+**EN (v0.5.0):**
 
-| 配方 | 输入 | 输出 | 经验 |
-|------|------|------|------|
-| Steel | hematite ×2 + coal ×1 | steel ×1 | +10 exp |
-| Glass | sand ×2 + coal ×1 | glass ×1 | +8 exp |
+```
+ore ──► Furnace F (no power, 30s×4) ──► ingots ──► Lathe L (2 EU) ──► steel parts
+ │
+ └──► Crusher X (4 EU) ► Washer W (2 EU) ► Centrifuge R (8 EU) ──► dusts ─┐
+                                                                           │
+   salt/water (BUY) ──► Electrolyzer Z (10 EU, 8s) ──► elements ──► Chemistry Bench K ──► compounds
+                          ▲ bauxite_dust feeds alumina recipe             (no power, instant)
+```
 
-> 💡 后期土高炉可以并行 4 槽烧炼 steel，比 C 合成快得多。
+**中文（v0.5.0）：**
+
+```
+矿石 ──► 土高炉 F（无电，30s×4）──► 锭 ──► 车床 L（2 EU）──► 钢零件
+ │
+ └──► 破碎机 X（4 EU）► 洗矿槽 W（2 EU）► 离心机 R（8 EU）──► 矿粉 ─┐
+                                                                    │
+ 盐/水（BUY）──► 电解机 Z（10 EU，8s）──► 元素 ──► 化合台 K ──► 化合物
+                  ▲ 铝土粉喂入铝土电解配方              （无电，即时）
+```
+
+➡️ **EN:** Chemistry details, recipes and profit tables: [Chemistry](Chemistry.md)
+**中文：** 化学详解、配方与收益表：[化学系统](Chemistry.md)
 
 ---
 
-## 📈 经验与等级
+## 🔨 Crafting & backpack / 合成与背包
 
-- 卖出物品 +5 exp / 件
-- 蓝图购买 +15 exp
-- 合成 +8~10 exp
-- 等级阈值：`100 + level × 20` exp 升级
+**EN:** Press `C` to open the **backpack** (the early standalone steel/glass craft menu was retired — steel comes from the Blast Furnace, which consumes 2 ore + 1 coal per batch internally; `glass` is bought at the market). The Chemistry Bench `K` is the current synthesis station.
+**中文：** 按 `C` 打开**背包**（早期的独立钢/玻璃合成菜单已移除——钢由土高炉产出，每批内部消耗 2 矿石 + 1 煤；`glass` 在市场购买）。当前的合成站是化合台 `K`。
+
+### Backpack tabs / 背包标签页（v0.5.0）
+
+`ORES/MINERALS` · `BASIC/RAW` · `FUELS` · `MATERIALS` · `PRODUCTS` · **`ELEMENTS`** · **`COMPOUNDS`** · `GEMS` · `BLUEPRINTS` · `MISC`
 
 ---
 
-## 🎓 教程系统
+## 📈 XP & leveling / 经验与等级
 
-游戏首次开始有 5 步教程，按提示完成即可关闭：
-1. Move & Explore（移动）
-2. Collect Resources（挖矿）
-3. Craft Items（合成）
-4. Trading System（交易）
-5. Blast Furnace（高炉）
+| Action / 行为 | XP / 经验 |
+|---|---|
+| Sell item / 卖物品 | +5 each |
+| Buy blueprint / 买蓝图 | +15 |
+| Craft / 合成 | +8–10 |
 
-> 教程不会自动重置，旧存档不会触发新教程步。
+**EN:** Level-up threshold = `100 + level × 20`.
+**中文：** 升级阈值 = `100 + 等级 × 20`。
+
+---
+
+## 🎓 Tutorial / 教程
+
+**EN:** 5 guided steps on first run: Move → Collect → Craft → Trade → Blast Furnace. Old saves never re-trigger tutorial steps.
+**中文：** 首次游戏 5 步引导：移动 → 采集 → 合成 → 交易 → 高炉。旧存档不会重新触发教程。

@@ -158,8 +158,23 @@ struct InvestmentMarket {
     };
 
     vector<Asset> assets = {
-        {"Gold", "GOLD", 100, 100, 25, 500, 3, 0, 0},
-        {"Bitcoin", "BTC", 250, 250, 40, 1200, 15, 0, 0},
+        // 贵金属）
+        {"Gold", "GOLD", 1000, 1000, 400, 1400, 3, 0, 0},
+        {"Silver", "SILV", 16, 16, 6, 50, 3, 0, 0},
+        {"Platinum", "PLAT", 550, 550, 300, 950, 8, 0, 0},
+        {"Palladium", "PALL", 1900, 1900, 800, 2650, 12, 0, 0},
+        // 工业金属
+        {"Copper", "COPR", 7, 7, 2, 20, 2, 0, 0},
+        {"Steel", "STEL", 15, 15, 5, 30, 2, 0, 0},
+        // 能源
+        {"Crude Oil", "OIL", 22, 22, 8, 80, 9, 0, 0},
+		{"Natural Gas", "GAS", 3, 3, 1, 10, 7, 0, 0},
+        // 加密货币（高波动）
+        {"Bitcoin", "BTC", 25000, 25000, 4000, 120000, 200, 0, 0},
+        {"Ethereum", "ETH", 110, 110, 25, 600, 18, 0, 0},
+        {"Gitcoin", "GTC", 1, 1, 0, 10, 50, 0, 0},
+        // 特殊物品
+        {"Easter_egg", "ESTE", 100, 100, 50, 200, 5, 0, 0},
     };
     int tickCounter = 0;
 
@@ -469,38 +484,124 @@ inline void cls() {
 
 // 物品售价表（文件级自由函数，供 TradeUI 等使用）
 int itemPrice(const string& name) {
+    // 定价基准（贴近现实商品相对价值，1c ≈ 1 美元量级；贵金属极端比价做压缩以保持可玩性）：
+    //   砂石/煤最便宜；铁矿→钢/铝为工业基础；铜/锡为常见有色金属；银、金为贵金属（金:银≈2.5:1，现实 80:1 压缩）；
+    //   加工链逐级增值：矿石 → 破碎×1.4 → 纯净×1.4 → 矿粉(≈锭×0.83) → 锭（2 矿直炼 1 锭，保证利润）。
     static map<string, int> prices = {
-        {"water", 3}, {"hematite", 5}, {"magnetite", 5}, {"bauxite", 4},
-        {"cassiterite", 5}, {"malachite", 6}, {"chalcopyrite", 6},
-        {"gold_ore", 20}, {"silver_ore", 12}, {"coal", 8},
-        {"steel", 30}, {"glass", 15}, {"sand", 2},
-        {"iron_ingot", 12}, {"alloy", 45},
-        // 车床产品（steel 前缀）
-        {"steel_gear", 25}, {"steel_rod", 20}, {"steel_plate", 18},
-        {"steel_spring", 30}, {"steel_bolt", 12}, {"steel_wire", 35},
-        // 金属锭（土高炉产物，之前漏了导致无法出售）
-        {"aluminum", 15}, {"tin", 18}, {"copper", 20},
-        {"gold_ingot", 60}, {"silver_ingot", 35},
-        // 合金锭（高炉合金冶炼产物）
-        {"bronze_ingot", 55}, {"electrum_ingot", 90},
-        // 矿物处理链主产物（24 种）
-        // 破碎矿石（crushed_*，破碎机产物）
-        {"crushed_hematite", 8}, {"crushed_magnetite", 8}, {"crushed_bauxite", 8},
-        {"crushed_cassiterite", 8}, {"crushed_malachite", 8}, {"crushed_chalcopyrite", 8},
-        {"crushed_gold", 8}, {"crushed_silver", 8},
-        // 纯净矿石（purified_*，洗矿槽产物）
-        {"purified_hematite", 12}, {"purified_magnetite", 12}, {"purified_bauxite", 12},
-        {"purified_cassiterite", 12}, {"purified_malachite", 12}, {"purified_chalcopyrite", 12},
-        {"purified_gold", 12}, {"purified_silver", 12},
-        // 矿粉（*_dust，离心机产物）
-        {"hematite_dust", 18}, {"magnetite_dust", 18}, {"bauxite_dust", 18},
-        {"cassiterite_dust", 18}, {"malachite_dust", 18}, {"chalcopyrite_dust", 18},
-        {"gold_dust", 18}, {"silver_dust", 18},
+        // 基础物资（现实：砂石煤炭大宗廉价）
+        {"water", 2}, {"sand", 1}, {"gravel", 1}, {"coal", 6}, {"glass", 12},
+        // 原矿（现实丰度：铝土>铁矿>铜矿>锡矿；银矿金矿稀缺）
+        {"bauxite", 4}, {"hematite", 6}, {"magnetite", 6},
+        {"malachite", 14}, {"chalcopyrite", 14},
+        {"cassiterite", 32},
+        {"silver_ore", 200}, {"gold_ore", 450},
+        // 金属锭（2 矿直炼 1 锭：锭价 > 2×矿价）
+        {"iron_ingot", 16}, {"steel", 22}, {"aluminum", 26},
+        {"copper", 48}, {"tin", 95},
+        {"silver_ingot", 600}, {"gold_ingot", 1500},
+        // 合金锭
+        {"bronze_ingot", 70}, {"electrum_ingot", 1050}, {"alloy", 40},
+        // 车床产品（钢的深加工制造增值）
+        {"steel_bolt", 18}, {"steel_rod", 30}, {"steel_plate", 28},
+        {"steel_gear", 45}, {"steel_wire", 50}, {"steel_spring", 55},
+        // 矿物处理链主产物（破碎=矿×1.4，纯净=破碎×1.4，粉≈锭×0.83）
+        {"crushed_bauxite", 6}, {"crushed_hematite", 9}, {"crushed_magnetite", 9},
+        {"crushed_malachite", 20}, {"crushed_chalcopyrite", 20},
+        {"crushed_cassiterite", 45},
+        {"crushed_silver", 280}, {"crushed_gold", 620},
+        {"purified_bauxite", 9}, {"purified_hematite", 13}, {"purified_magnetite", 13},
+        {"purified_malachite", 28}, {"purified_chalcopyrite", 28},
+        {"purified_cassiterite", 65},
+        {"purified_silver", 400}, {"purified_gold", 900},
+        {"bauxite_dust", 22}, {"hematite_dust", 18}, {"magnetite_dust", 18},
+        {"malachite_dust", 40}, {"chalcopyrite_dust", 40},
+        {"cassiterite_dust", 80},
+        {"silver_dust", 510}, {"gold_dust", 1250},
         // 副产物
-        {"gravel", 1}, {"copper_dust", 20}, {"rare_dust", 30}
+        {"copper_dust", 42}, {"rare_dust", 150},
+        // ===== 宝石系统（洞穴稀有矿 → 破碎 → 筛选机分级）=====
+        // 宝石原矿（不进商店 BUY，挖矿独占）
+        {"sapphire_ore", 50}, {"ruby_ore", 60}, {"emerald_ore", 70}, {"diamond_ore", 80},
+        // 破碎宝石料
+        {"crushed_sapphire", 70}, {"crushed_ruby", 90}, {"crushed_emerald", 100}, {"crushed_diamond", 120},
+        // 5 级成品：sapphire / ruby / emerald / diamond
+        {"sapphire_dust", 40}, {"ruby_dust", 45}, {"emerald_dust", 50}, {"diamond_dust", 60},
+        {"broken_sapphire", 90}, {"broken_ruby", 110}, {"broken_emerald", 120}, {"broken_diamond", 150},
+        {"rough_sapphire", 250}, {"rough_ruby", 300}, {"rough_emerald", 330}, {"rough_diamond", 400},
+        {"flawless_sapphire", 750}, {"flawless_ruby", 900}, {"flawless_emerald", 1000}, {"flawless_diamond", 1200},
+        {"perfect_sapphire", 1800}, {"perfect_ruby", 2200}, {"perfect_emerald", 2400}, {"perfect_diamond", 3000},
+        // ===== 化学系统（电解/化合）=====
+        // 9 种新元素（其余 6 金属元素复用现有锭）
+        {"hydrogen", 30}, {"oxygen", 25}, {"carbon", 20}, {"nitrogen", 35}, {"sulfur", 40},
+        {"chlorine", 50}, {"sodium", 60}, {"magnesium", 45}, {"silicon", 55},
+        // 化合物（water/bauxite_dust 已存在）
+        {"salt", 15}, {"sodium_hydroxide", 120}, {"copper_sulfate", 220}, {"iron_sulfide", 90}
     };
     auto it = prices.find(name);
     return it != prices.end() ? it->second : 0;
+}
+
+// ===== 宝石系统工具（T 交易需求轮换用）=====
+// 4 种宝石基名
+inline const vector<string>& gemBaseNames() {
+    static vector<string> v = { "sapphire", "ruby", "emerald", "diamond" };
+    return v;
+}
+// 是否为 5 级宝石成品（20 种）
+inline bool isGemItem(const string& name) {
+    static const vector<string> grades = { "perfect_", "flawless_", "rough_", "broken_" };
+    for (auto& g : grades)
+        for (auto& b : gemBaseNames())
+            if (name == g + b) return true;
+    for (auto& b : gemBaseNames())
+        if (name == b + "_dust") return true;
+    return false;
+}
+// 低品级（破碎/粉，8 种）：商人永远收购
+inline bool isLowGradeGem(const string& name) {
+    for (auto& b : gemBaseNames())
+        if (name == "broken_" + b || name == b + "_dust") return true;
+    return false;
+}
+// 高品级池（perfect/flawless/rough × 4 = 12 种）：需求轮换从中抽
+inline vector<string> highGradeGemPool() {
+    vector<string> v;
+    for (auto& pre : { "perfect_", "flawless_", "rough_" })
+        for (auto& b : gemBaseNames())
+            v.push_back(string(pre) + b);
+    return v;
+}
+
+// ===== 化学系统工具（电解/化合用）=====
+// 9 种新元素物品（其余 6 种金属元素复用现有锭：iron_ingot/copper/aluminum/tin/silver_ingot/gold_ingot）
+inline const vector<string>& newElementNames() {
+    static vector<string> v = { "hydrogen","oxygen","carbon","nitrogen","sulfur",
+                               "chlorine","sodium","magnesium","silicon" };
+    return v;
+}
+// 6 种金属锭作为元素参与化学配方
+inline const vector<string>& metalElementNames() {
+    static vector<string> v = { "iron_ingot","copper","aluminum","tin","silver_ingot","gold_ingot" };
+    return v;
+}
+inline bool isElement(const string& name) {
+    for (auto& e : newElementNames()) if (name == e) return true;
+    for (auto& m : metalElementNames()) if (name == m) return true;
+    return false;
+}
+// 新增化合物（water/bauxite_dust 复用现有，不在此集合但可被电解/化合识别）
+inline bool isCompound(const string& name) {
+    static const vector<string> v = { "salt","sodium_hydroxide","copper_sulfate","iron_sulfide" };
+    for (auto& c : v) if (name == c) return true;
+    return false;
+}
+// 化学产物的背包分类：金属锭沿用 "product"（与炉子合并栈），新元素 "element"，化合物 "compound"，水 "basic"
+inline string chemOutputCategory(const string& name) {
+    for (auto& m : metalElementNames()) if (name == m) return "product";
+    for (auto& e : newElementNames()) if (name == e) return "element";
+    if (name == "water") return "basic";
+    if (isCompound(name)) return "compound";
+    return "misc";
 }
 
 class ChemicalWorldGame;   // 前向声明，供 LatheUI / TradeUI 引用
@@ -1097,7 +1198,11 @@ private:
         {"Crush Malachite",   "malachite",   "crushed_malachite",   1, 2, 10000, "gravel", 1},
         {"Crush Chalcopyrite","chalcopyrite","crushed_chalcopyrite",1, 2, 10000, "gravel", 1},
         {"Crush Gold Ore",    "gold_ore",    "crushed_gold",        1, 2, 10000, "gravel", 1},
-        {"Crush Silver Ore",  "silver_ore",  "crushed_silver",      1, 2, 10000, "gravel", 1}
+        {"Crush Silver Ore",  "silver_ore",  "crushed_silver",      1, 2, 10000, "gravel", 1},
+        {"Crush Sapphire Ore","sapphire_ore","crushed_sapphire",    1, 2, 10000, "gravel", 1},
+        {"Crush Ruby Ore",    "ruby_ore",    "crushed_ruby",        1, 2, 10000, "gravel", 1},
+        {"Crush Emerald Ore", "emerald_ore", "crushed_emerald",     1, 2, 10000, "gravel", 1},
+        {"Crush Diamond Ore", "diamond_ore", "crushed_diamond",     1, 2, 10000, "gravel", 1}
     };
 
     int computeFrame(const Slot& s) const {
@@ -1169,7 +1274,10 @@ public:
         Slot& s = slots[slotIdx];
         if (s.phase != DONE_POUR) return false;
         Recipe& r = recipes[s.recipeIndex];
-        p.addItem(r.crushedName, r.crushedAmount, "crushed", 8);
+        // 宝石破碎料归入 material（背包可见），其余工业破碎料沿用 crushed
+        bool gemCrush = r.crushedName == "crushed_sapphire" || r.crushedName == "crushed_ruby" ||
+                        r.crushedName == "crushed_emerald" || r.crushedName == "crushed_diamond";
+        p.addItem(r.crushedName, r.crushedAmount, gemCrush ? "material" : "crushed", 8);
         p.addItem(r.byproduct, r.byproductAmount, "material", itemPrice(r.byproduct));
         s.phase = IDLE;
         s.progressMs = 0;
@@ -1450,6 +1558,286 @@ public:
     }
 };
 
+// OreSorter 宝石筛选机：单槽，耗电 6 EU/tick，1 crushed_<gem> → ROLL 5 品级 + 20% rare_dust
+class OreSorter {
+public:
+    enum AnimState { Idle, Sorting, Done };
+    struct Recipe {
+        string name;
+        string crushedName;
+        string gemBase;        // sapphire / ruby / emerald / diamond
+        int durationMs;
+    };
+
+private:
+    AnimState animState = Idle;
+    bool isRunning = false;
+    bool hasPowerThisTick = true;
+    int progress = 0;
+    int accumulatedMs = 0;
+    int totalMs = 6000;
+    int selectedRecipe = 0;
+    int loadedRecipe = 0;
+    int frameIndex = 0;
+    string lastGrade;          // 上次ROLL出的成品物品名
+    int lastRareAmount = 0;    // 上次副产物数量
+
+    vector<Recipe> recipes = {
+        {"Sort Sapphire", "crushed_sapphire", "sapphire", 6000},
+        {"Sort Ruby",     "crushed_ruby",     "ruby",     6000},
+        {"Sort Emerald",  "crushed_emerald",  "emerald",  6000},
+        {"Sort Diamond",  "crushed_diamond",  "diamond",  6000}
+    };
+
+public:
+    AnimState getAnimState() const { return animState; }
+    bool getRunning() const { return isRunning; }
+    void setRunning(bool r) { isRunning = r; }
+    bool getHasPowerThisTick() const { return hasPowerThisTick; }
+    void setHasPowerThisTick(bool p) { hasPowerThisTick = p; }
+    int getProgress() const { return progress; }
+    int getSelectedRecipe() const { return selectedRecipe; }
+    void setSelectedRecipe(int r) { if (r >= 0 && r < (int)recipes.size()) selectedRecipe = r; }
+    int getRecipeCount() const { return (int)recipes.size(); }
+    const Recipe& getRecipe(int i) const { return recipes[i]; }
+    int getFrameIndex() const { return frameIndex; }
+    string getLastGrade() const { return lastGrade; }
+    int getLastRareAmount() const { return lastRareAmount; }
+
+    vector<string> getRecipeList() const {
+        vector<string> v;
+        for (auto& r : recipes)
+            v.push_back(r.name + "  (" + r.crushedName + " -> graded gem)");
+        return v;
+    }
+
+    bool canLoad(PlayerData& p) const {
+        if (animState != Idle) return false;
+        const Recipe& r = recipes[selectedRecipe];
+        return p.hasItem(r.crushedName, 1);
+    }
+
+    bool loadMaterials(PlayerData& p) {
+        if (!canLoad(p)) return false;
+        Recipe& r = recipes[selectedRecipe];
+        p.removeItem(r.crushedName, 1);
+        animState = Sorting;
+        loadedRecipe = selectedRecipe;
+        progress = 0;
+        accumulatedMs = 0;
+        totalMs = r.durationMs;
+        isRunning = true;
+        lastGrade = "";
+        lastRareAmount = 0;
+        return true;
+    }
+
+    bool collect(PlayerData& p) {
+        if (animState != Done) return false;
+        if (!lastGrade.empty())
+            p.addItem(lastGrade, 1, "gem", itemPrice(lastGrade));
+        if (lastRareAmount > 0)
+            p.addItem("rare_dust", lastRareAmount, "material", itemPrice("rare_dust"));
+        animState = Idle;
+        progress = 0;
+        accumulatedMs = 0;
+        isRunning = false;
+        return true;
+    }
+
+    void update(PlayerData& p, int elapsedMs = 100) {
+        if (animState != Sorting) return;
+        if (!hasPowerThisTick) { isRunning = false; return; }
+        isRunning = true;
+        accumulatedMs += elapsedMs;
+        frameIndex = (frameIndex + 1) % 8;
+        progress = totalMs > 0 ? (accumulatedMs * 100) / totalMs : 0;
+        if (accumulatedMs >= totalMs) {
+            Recipe& r = recipes[loadedRecipe];
+            // 品级 ROLL：perfect 2% / flawless 8% / rough 35% / broken 30% / dust 25%
+            int roll = rand() % 100;
+            if (roll < 2) lastGrade = "perfect_" + r.gemBase;
+            else if (roll < 10) lastGrade = "flawless_" + r.gemBase;
+            else if (roll < 45) lastGrade = "rough_" + r.gemBase;
+            else if (roll < 75) lastGrade = "broken_" + r.gemBase;
+            else lastGrade = r.gemBase + "_dust";
+            // 20% 稀有副产物
+            lastRareAmount = (rand() % 100) < 20 ? 1 : 0;
+            animState = Done;
+            progress = 100;
+            isRunning = false;
+        }
+    }
+};
+
+// Electrolyzer 电解机：单槽，耗电 10 EU/tick，8 秒/次，化合物 → 多元素/化合物
+class Electrolyzer {
+public:
+    enum AnimState { Idle, Electrolyzing, Done };
+    struct Recipe {
+        string name;
+        vector<pair<string, int>> inputs;   // {name, amount}
+        vector<pair<string, int>> outputs;
+        int durationMs;
+    };
+
+private:
+    AnimState animState = Idle;
+    bool isRunning = false;
+    bool hasPowerThisTick = true;
+    int progress = 0;
+    int accumulatedMs = 0;
+    int totalMs = 8000;
+    int selectedRecipe = 0;
+    int loadedRecipe = 0;
+    int frameIndex = 0;
+
+    vector<Recipe> recipes = {
+        {"Electrolyze Water",
+            {{"water", 1}},
+            {{"hydrogen", 2}, {"oxygen", 1}}, 8000},
+        {"Electrolyze Alumina (bauxite dust)",
+            {{"bauxite_dust", 1}},
+            {{"aluminum", 2}, {"oxygen", 3}}, 8000},
+        {"Electrolyze Salt (molten)",
+            {{"salt", 1}},
+            {{"sodium", 1}, {"chlorine", 1}}, 8000},
+        {"Chlor-alkali (salt + water)",
+            {{"salt", 1}, {"water", 1}},
+            {{"chlorine", 1}, {"hydrogen", 1}, {"sodium_hydroxide", 1}}, 8000},
+    };
+
+public:
+    AnimState getAnimState() const { return animState; }
+    bool getRunning() const { return isRunning; }
+    void setRunning(bool r) { isRunning = r; }
+    bool getHasPowerThisTick() const { return hasPowerThisTick; }
+    void setHasPowerThisTick(bool p) { hasPowerThisTick = p; }
+    int getProgress() const { return progress; }
+    int getSelectedRecipe() const { return selectedRecipe; }
+    void setSelectedRecipe(int r) { if (r >= 0 && r < (int)recipes.size()) selectedRecipe = r; }
+    int getRecipeCount() const { return (int)recipes.size(); }
+    const Recipe& getRecipe(int i) const { return recipes[i]; }
+    int getFrameIndex() const { return frameIndex; }
+
+    vector<string> getRecipeList() const {
+        vector<string> v;
+        for (auto& r : recipes) {
+            string in, out;
+            for (size_t i = 0; i < r.inputs.size(); ++i) {
+                if (i) in += " + ";
+                in += r.inputs[i].first + (r.inputs[i].second > 1 ? " x" + to_string(r.inputs[i].second) : "");
+            }
+            for (size_t i = 0; i < r.outputs.size(); ++i) {
+                if (i) out += " + ";
+                out += r.outputs[i].first + (r.outputs[i].second > 1 ? " x" + to_string(r.outputs[i].second) : "");
+            }
+            v.push_back(r.name + "  (" + in + " -> " + out + ")");
+        }
+        return v;
+    }
+
+    bool canLoad(PlayerData& p) const {
+        if (animState != Idle) return false;
+        const Recipe& r = recipes[selectedRecipe];
+        for (auto& in : r.inputs)
+            if (!p.hasItem(in.first, in.second)) return false;
+        return true;
+    }
+
+    bool loadMaterials(PlayerData& p) {
+        if (!canLoad(p)) return false;
+        Recipe& r = recipes[selectedRecipe];
+        for (auto& in : r.inputs) p.removeItem(in.first, in.second);
+        animState = Electrolyzing;
+        loadedRecipe = selectedRecipe;
+        progress = 0;
+        accumulatedMs = 0;
+        totalMs = r.durationMs;
+        isRunning = true;
+        return true;
+    }
+
+    bool collect(PlayerData& p) {
+        if (animState != Done) return false;
+        Recipe& r = recipes[loadedRecipe];
+        for (auto& out : r.outputs)
+            p.addItem(out.first, out.second, chemOutputCategory(out.first), itemPrice(out.first));
+        animState = Idle;
+        progress = 0;
+        accumulatedMs = 0;
+        isRunning = false;
+        return true;
+    }
+
+    void update(PlayerData& p, int elapsedMs = 100) {
+        if (animState != Electrolyzing) return;
+        if (!hasPowerThisTick) { isRunning = false; return; }
+        isRunning = true;
+        accumulatedMs += elapsedMs;
+        frameIndex = (frameIndex + 1) % 8;
+        progress = totalMs > 0 ? (accumulatedMs * 100) / totalMs : 0;
+        if (accumulatedMs >= totalMs) {
+            animState = Done;
+            progress = 100;
+            isRunning = false;
+        }
+    }
+};
+
+// ChemistryBench 化合台：不耗电，消耗多份元素产出化合物
+class ChemistryBench {
+public:
+    struct Recipe {
+        string name;
+        vector<pair<string, int>> inputs;
+        string outputName;
+        int outputAmount;
+    };
+
+private:
+    vector<Recipe> recipes = {
+        {"Synthesize Water",            {{"hydrogen", 2}, {"oxygen", 1}}, "water", 1},
+        {"Synthesize Salt",             {{"sodium", 1}, {"chlorine", 1}}, "salt", 1},
+        {"Synthesize Sodium Hydroxide", {{"sodium", 1}, {"oxygen", 1}, {"hydrogen", 1}}, "sodium_hydroxide", 1},
+        {"Synthesize Copper Sulfate",   {{"copper", 1}, {"sulfur", 1}, {"oxygen", 4}}, "copper_sulfate", 1},
+        {"Synthesize Iron Sulfide",     {{"iron_ingot", 1}, {"sulfur", 1}}, "iron_sulfide", 1},
+    };
+
+public:
+    int getRecipeCount() const { return (int)recipes.size(); }
+    const Recipe& getRecipe(int i) const { return recipes[i]; }
+
+    vector<string> getRecipeList() const {
+        vector<string> v;
+        for (auto& r : recipes) {
+            string in;
+            for (size_t i = 0; i < r.inputs.size(); ++i) {
+                if (i) in += " + ";
+                in += r.inputs[i].first + (r.inputs[i].second > 1 ? " x" + to_string(r.inputs[i].second) : "");
+            }
+            v.push_back(r.name + "  (" + in + " -> " + r.outputName + " x" + to_string(r.outputAmount) + ")");
+        }
+        return v;
+    }
+
+    bool canCraft(PlayerData& p, int idx) const {
+        if (idx < 0 || idx >= (int)recipes.size()) return false;
+        const Recipe& r = recipes[idx];
+        for (auto& in : r.inputs)
+            if (!p.hasItem(in.first, in.second)) return false;
+        return true;
+    }
+
+    bool craft(PlayerData& p, int idx) {
+        if (!canCraft(p, idx)) return false;
+        const Recipe& r = recipes[idx];
+        for (auto& in : r.inputs) p.removeItem(in.first, in.second);
+        p.addItem(r.outputName, r.outputAmount, chemOutputCategory(r.outputName), itemPrice(r.outputName));
+        return true;
+    }
+};
+
 // ======================== 地图系统 ========================
 struct Tile {
     char display;
@@ -1514,6 +1902,31 @@ private:
                     tiles[y][x].description = "Exposed ore deposit";
                     tiles[y][x].mineral = mineral.first;
                     tiles[y][x].richness = 1 + rand() % 3;
+                }
+                if (rand() % 2) x += rand() % 3 - 1;
+                else y += rand() % 3 - 1;
+            }
+        }
+    }
+
+    // 宝石矿脉：仅洞穴生成，稀有、矿脉小（1-2 格），在普通矿物之前调用
+    void placeGemVeins(int count) {
+        static const vector<pair<string, char>> gems = {
+            {"sapphire_ore", 'j'}, {"ruby_ore", 'y'},
+            {"emerald_ore", 'e'}, {"diamond_ore", 'd'}
+        };
+        for (int vein = 0; vein < count; ++vein) {
+            int x = 2 + rand() % max(1, width - 4);
+            int y = 2 + rand() % max(1, height - 4);
+            auto gem = gems[rand() % gems.size()];
+            for (int i = 0; i < 1 + rand() % 2; ++i) {
+                if (x > 0 && x < width - 1 && y > 0 && y < height - 1 &&
+                    tiles[y][x].passable && tiles[y][x].mineral.empty()) {
+                    tiles[y][x].display = gem.second;
+                    tiles[y][x].name = gem.first;
+                    tiles[y][x].description = "Rare gem deposit";
+                    tiles[y][x].mineral = gem.first;
+                    tiles[y][x].richness = 1 + rand() % 2;
                 }
                 if (rand() % 2) x += rand() % 3 - 1;
                 else y += rand() % 3 - 1;
@@ -1627,6 +2040,7 @@ private:
             if (x == 0 || y == 0 || x == width - 1 || y == height - 1 || rand() % 7 == 0)
                 tiles[y][x] = { '=', "Rock", "Impassable rock", false, COLOR_GREY };
         tiles[1][1] = { 'O', "Cave Exit", "Return to wasteland", true, COLOR_CYAN };
+        placeGemVeins(6);
         placeMinerals(35);
     }
 
@@ -2324,17 +2738,45 @@ private:
     bool& crusherBPUnlocked;
     bool& washerBPUnlocked;
     bool& centrifugeBPUnlocked;
+    bool& sorterBPUnlocked;
+    bool& electrolyzerBPUnlocked;
+    bool& chembenchBPUnlocked;
+    // 本轮商人宝石收购需求（低品级常驻 + 高品级随机 3 种）
+    const set<string>& gemDemand;
+
+    // 宝石当前是否可卖（非宝石永远可卖；宝石必须在需求集合内）
+    bool isWanted(const string& name) const {
+        return !isGemItem(name) || gemDemand.count(name) > 0;
+    }
+
+    // SELL tab 顶部 "TODAY'S DEMAND" 行
+    string demandLine() const {
+        string line = "  TODAY'S DEMAND (high-grade): ";
+        int n = 0;
+        for (auto& g : gemDemand) {
+            if (isLowGradeGem(g)) continue;
+            line += g + ", ";
+            ++n;
+        }
+        if (n > 0) line.erase(line.size() - 2);
+        line += "   |   broken gems & dust always bought";
+        return line;
+    }
 
     void rebuildSell() {
         sellEntries.clear(); sellNames.clear(); sellQty.clear(); sellPrices.clear();
         for (auto& item : player.inventory) {
             if (item.quantity > 0) {
                 int p = itemPrice(item.name);
+                // 宝石：不在本轮需求内 → 收购价 0
+                if (p > 0 && !isWanted(item.name)) p = 0;
                 sellNames.push_back(item.name);
                 sellQty.push_back(item.quantity);
                 sellPrices.push_back(p);
                 string line = "  " + item.name + "  x" + to_string(item.quantity);
-                line += p > 0 ? ("   [" + to_string(p) + "c]") : "   [not sellable]";
+                if (p > 0) line += "   [" + to_string(p) + "c]";
+                else if (isGemItem(item.name)) line += "   [no demand]";
+                else line += "   [not sellable]";
                 sellEntries.push_back(line);
             }
         }
@@ -2349,7 +2791,7 @@ private:
         // 1. 原材料 (itemPrice * 3 向上取整为整数)
         vector<string> rawNames = { "hematite","magnetite","bauxite","cassiterite","malachite",
                                      "chalcopyrite","gold_ore","silver_ore","coal","sand","glass",
-                                     "steel","iron_ingot","alloy" };
+                                     "steel","iron_ingot","alloy","salt","water" };
         for (auto& n : rawNames) {
             int base = itemPrice(n);
             int bp = base * 3;
@@ -2364,15 +2806,18 @@ private:
             int bp = max(base * 3, 30);
             buyEntries.push_back({ "  " + n + "   [" + to_string(bp) + "c]   x1", n, bp, "", });
         }
-        // 3. 蓝图（机器蓝图：gen 150 / wire 50 / crusher 200 / washer 160 / centrifuge 250）
-        // 结构：{label, itemName, buyPrice, bpType}
+        // 3. 蓝图（机器蓝图：gen 150 / wire 50 / crusher 200 / washer 160 / centrifuge 250 / sorter 220）
+        // 结构：{type, disp, price, bool& flag}
         struct BP { string type; string disp; int price; bool& flag; };
-        BP bps[5] = {
+        BP bps[8] = {
             { "gen",         "Generator Blueprint",  150, genBPUnlocked },
             { "wire",        "Wire Blueprint",        50, wireBPUnlocked },
             { "crusher",     "Crusher Blueprint",    200, crusherBPUnlocked },
             { "washer",      "Ore Washer Blueprint", 160, washerBPUnlocked },
             { "centrifuge",  "Centrifuge Blueprint", 250, centrifugeBPUnlocked },
+            { "sorter",      "Gem Sorter Blueprint", 220, sorterBPUnlocked },
+            { "electrolyzer","Electrolyzer Blueprint",300, electrolyzerBPUnlocked },
+            { "chembench",   "Chemistry Bench Blueprint", 180, chembenchBPUnlocked },
         };
         for (auto& b : bps) {
             string label = b.flag ? ("  [OWNED] " + b.disp + " (" + to_string(b.price) + "c)")
@@ -2416,13 +2861,17 @@ private:
     }
 
 public:
-    // 构造函数：5 个机器蓝图 bool 引用（gen/wire/crusher/washer/centrifuge）
+    // 构造函数：8 个机器蓝图 bool 引用 + 宝石需求集合
     TradeUI(PlayerData& p, ScreenInteractive& s,
             bool& genBP, bool& wireBP,
-            bool& crusherBP, bool& washerBP, bool& centrifugeBP)
+            bool& crusherBP, bool& washerBP, bool& centrifugeBP, bool& sorterBP,
+            bool& electrolyzerBP, bool& chembenchBP,
+            const set<string>& demand)
         : player(p), screen(s), genBPUnlocked(genBP), wireBPUnlocked(wireBP),
           crusherBPUnlocked(crusherBP), washerBPUnlocked(washerBP),
-          centrifugeBPUnlocked(centrifugeBP) {
+          centrifugeBPUnlocked(centrifugeBP), sorterBPUnlocked(sorterBP),
+          electrolyzerBPUnlocked(electrolyzerBP), chembenchBPUnlocked(chembenchBP),
+          gemDemand(demand) {
         setupUI();
     }
 
@@ -2467,7 +2916,8 @@ public:
             if (tabSelected != 0) return;
             vector<pair<string, int>> toSell;
             for (auto& item : player.inventory) {
-                if (item.quantity > 0 && itemPrice(item.name) > 0) {
+                // 宝石仅在本轮需求内才随"全部出售"卖出
+                if (item.quantity > 0 && itemPrice(item.name) > 0 && isWanted(item.name)) {
                     toSell.push_back({ item.name, item.quantity });
                 }
             }
@@ -2507,6 +2957,9 @@ public:
                 else if (e.bpType == "crusher"){ flagPtr = &crusherBPUnlocked;     dispName = "Crusher Blueprint"; }
                 else if (e.bpType == "washer") { flagPtr = &washerBPUnlocked;      dispName = "Ore Washer Blueprint"; }
                 else if (e.bpType == "centrifuge") { flagPtr = &centrifugeBPUnlocked; dispName = "Centrifuge Blueprint"; }
+                else if (e.bpType == "sorter")    { flagPtr = &sorterBPUnlocked;    dispName = "Gem Sorter Blueprint"; }
+                else if (e.bpType == "electrolyzer") { flagPtr = &electrolyzerBPUnlocked; dispName = "Electrolyzer Blueprint"; }
+                else if (e.bpType == "chembench") { flagPtr = &chembenchBPUnlocked; dispName = "Chemistry Bench Blueprint"; }
                 if (!flagPtr) return;
                 if (*flagPtr) {
                     statusMessage = "You already own this blueprint.";
@@ -2583,7 +3036,8 @@ public:
                     text("  Total:  " + to_string(value) + "c"),
                     separator(),
                     price > 0 ? text("  Sellable.") | color(Color::Green)
-                              : text("  Not sellable here.") | color(Color::Red),
+                              : (isGemItem(name) ? text("  No demand today. Wait for a new quote.") | color(Color::Red)
+                                                 : text("  Not sellable here.") | color(Color::Red)),
                 }) | border | size(WIDTH, GREATER_THAN, 36);
             }
             else {
@@ -2601,6 +3055,9 @@ public:
                     else if (e.bpType == "crusher"){ dispName = "Crusher Blueprint";    title = "CRUSHER";     owned = crusherBPUnlocked; }
                     else if (e.bpType == "washer") { dispName = "Ore Washer Blueprint";  title = "ORE WASHER";  owned = washerBPUnlocked; }
                     else if (e.bpType == "centrifuge") { dispName = "Centrifuge Blueprint"; title = "CENTRIFUGE"; owned = centrifugeBPUnlocked; }
+                    else if (e.bpType == "sorter") { dispName = "Gem Sorter Blueprint"; title = "GEM SORTER"; owned = sorterBPUnlocked; }
+                    else if (e.bpType == "electrolyzer") { dispName = "Electrolyzer Blueprint"; title = "ELECTROLYZER"; owned = electrolyzerBPUnlocked; }
+                    else if (e.bpType == "chembench") { dispName = "Chemistry Bench Blueprint"; title = "CHEMISTRY BENCH"; owned = chembenchBPUnlocked; }
                     else { dispName = "Blueprint"; title = "BLUEPRINT"; }
                     return vbox({
                         text("  " + title + " BLUEPRINT") | bold | color(Color::Yellow),
@@ -2651,6 +3108,9 @@ public:
                 separator(),
                 topBar,
                 separator(),
+                (tabSelected == 0
+                    ? (text(demandLine()) | color(Color::Yellow))
+                    : text("")),
                 hbox({
                     vbox({
                         text(tabSelected == 0 ? " YOUR BACKPACK" : " BUY CATALOG") | bold | color(Color::Cyan),
@@ -2782,7 +3242,7 @@ public:
                 assetMenu->Render() | flex,
                 separator(),
                 text(details) | color(Color::Green),
-                text("  Prices update with the game clock. Gold is steadier; BTC is more volatile.") | color(Color::GrayDark),
+                text("  Prices update with the game clock. Precious metals are steadier; oil & crypto swing more.") | color(Color::GrayDark),
                 separator(),
                 buttons->Render() | center,
                 text(statusMessage) | color(Color::Yellow),
@@ -2965,8 +3425,9 @@ void GameMap::generateCave(CaveType t) {
         genCaveGrey();   // t=0 灰岩洞旧默认
         return;
     }
-    // 公共后处理：O(1,1) + 矿物
+    // 公共后处理：O(1,1) + 宝石矿脉（稀有，先放）+ 普通矿物
     tiles[1][1] = { 'O', "Cave Exit", "Return to wasteland", true, COLOR_CYAN };
+    placeGemVeins(6);
     placeMinerals(35);
 }
 
@@ -2994,6 +3455,9 @@ private:
     bool crusher_blueprint_unlocked = false;
     bool washer_blueprint_unlocked = false;
     bool centrifuge_blueprint_unlocked = false;
+    bool sorter_blueprint_unlocked = false;
+    bool electrolyzer_blueprint_unlocked = false;
+    bool chembench_blueprint_unlocked = false;
     // 多彩世界：上次切换后的群系子类型（临时状态，不存档；每次切换重随机）
     WastelandBiome wasteBiome = WastelandBiome::WASTELAND;
     CaveType caveType = CaveType::GREY_CAVE;
@@ -3002,6 +3466,11 @@ private:
     map<pair<int, int>, Crusher> crushers;
     map<pair<int, int>, OreWasher> washers;
     map<pair<int, int>, Centrifuge> centrifuges;
+    map<pair<int, int>, OreSorter> sorters;
+    map<pair<int, int>, Electrolyzer> electrolyzers;
+    map<pair<int, int>, ChemistryBench> chemBenches;
+    // 宝石商人本轮需求（每次打开 T 刷新；不存档）
+    set<string> gemDemand;
     set<pair<int, int>> poweredMachines;
 
     bool powerDraw(int eu, pair<int, int> machineXY) {
@@ -3036,7 +3505,7 @@ private:
     bool saveGame(int slot) {
         ofstream output(savePath(slot));
         if (!output) return false;
-        output << "CHEMICAL_WORLD_SAVE 5\n";
+        output << "CHEMICAL_WORLD_SAVE 7\n";
         output << player.name << '\n' << player.level << ' ' << player.coins << ' '
             << player.exp << ' ' << player.x << ' ' << player.y << '\n';
         output << static_cast<int>(currentArea) << '\n';
@@ -3048,13 +3517,16 @@ private:
         output << '\n';
         gameMap.save(output);
 
-        // === v4 追加段（5 个蓝图状态：gen/wire 沿用 v3 前缀，crusher/washer/centrifuge 为 v4 新增）===
+        // === v4 追加段（蓝图状态：gen/wire + crusher/washer/centrifuge；sorter 为 v6 新增）===
         int tmp = 0;
         tmp = gen_blueprint_unlocked ? 1 : 0;          output << tmp << ' ';
         tmp = wire_blueprint_unlocked ? 1 : 0;         output << tmp << ' ';
         tmp = crusher_blueprint_unlocked ? 1 : 0;      output << tmp << ' ';
         tmp = washer_blueprint_unlocked ? 1 : 0;       output << tmp << ' ';
-        tmp = centrifuge_blueprint_unlocked ? 1 : 0;   output << tmp << '\n';
+        tmp = centrifuge_blueprint_unlocked ? 1 : 0;   output << tmp << ' ';
+        tmp = sorter_blueprint_unlocked ? 1 : 0;       output << tmp << ' ';
+        tmp = electrolyzer_blueprint_unlocked ? 1 : 0; output << tmp << ' ';
+        tmp = chembench_blueprint_unlocked ? 1 : 0;    output << tmp << '\n';
         output << globalEU << '\n';
 
         // 把 generators 燃烧数据同步进 machineMeta 再统一保存
@@ -3087,7 +3559,7 @@ private:
         string header;
         int version = 0;
         if (!input || !(input >> header >> version) || header != "CHEMICAL_WORLD_SAVE" ||
-            (version != 2 && version != 3 && version != 4 && version != 5)) return false;
+            (version != 2 && version != 3 && version != 4 && version != 5 && version != 6 && version != 7)) return false;
         if (!(input >> player.name >> player.level >> player.coins >> player.exp >> player.x >> player.y)) return false;
         int savedArea = 0;
         if (!(input >> savedArea) || savedArea < 0 || savedArea > 2) return false;
@@ -3117,12 +3589,19 @@ private:
         crusher_blueprint_unlocked = false;
         washer_blueprint_unlocked = false;
         centrifuge_blueprint_unlocked = false;
+        sorter_blueprint_unlocked = false;
+        electrolyzer_blueprint_unlocked = false;
+        chembench_blueprint_unlocked = false;
         globalEU = 0;
         machineMeta.clear();
         generators.clear();
         crushers.clear();
         washers.clear();
         centrifuges.clear();
+        sorters.clear();
+        electrolyzers.clear();
+        chemBenches.clear();
+        gemDemand.clear();
         poweredMachines.clear();
         investmentMarket = InvestmentMarket{};
         furnace = BlastFurnace{};
@@ -3137,7 +3616,7 @@ private:
                 }
             }
         }
-        if (version >= 3 && version <= 5) {
+        if (version >= 3 && version <= 7) {
             int tmp = 0;
             if (!(input >> tmp)) return false; gen_blueprint_unlocked = !!tmp;
             if (!(input >> tmp)) return false; wire_blueprint_unlocked = !!tmp;
@@ -3146,6 +3625,15 @@ private:
                 if (!(input >> tmp)) return false; crusher_blueprint_unlocked = !!tmp;
                 if (!(input >> tmp)) return false; washer_blueprint_unlocked = !!tmp;
                 if (!(input >> tmp)) return false; centrifuge_blueprint_unlocked = !!tmp;
+            }
+            // v6 追加筛选机蓝图；v5 及更早保持 false
+            if (version >= 6) {
+                if (!(input >> tmp)) return false; sorter_blueprint_unlocked = !!tmp;
+            }
+            // v7 追加载电机/化合台蓝图；v6 及更早保持 false
+            if (version >= 7) {
+                if (!(input >> tmp)) return false; electrolyzer_blueprint_unlocked = !!tmp;
+                if (!(input >> tmp)) return false; chembench_blueprint_unlocked = !!tmp;
             }
             if (!(input >> globalEU)) return false;
             size_t metaCount = 0;
@@ -3167,7 +3655,7 @@ private:
                 // 这里只需保留 machineMeta 条目（用于 E 键查找与地图渲染）。
             }
         }
-        if (version == 5) {
+        if (version >= 5) {
             size_t assetCount = 0;
             if (!(input >> investmentMarket.tickCounter >> assetCount)) return false;
             for (size_t i = 0; i < assetCount; ++i) {
@@ -3213,12 +3701,19 @@ private:
         crusher_blueprint_unlocked = false;
         washer_blueprint_unlocked = false;
         centrifuge_blueprint_unlocked = false;
+        sorter_blueprint_unlocked = false;
+        electrolyzer_blueprint_unlocked = false;
+        chembench_blueprint_unlocked = false;
         wasteBiome = WastelandBiome::WASTELAND;
         caveType = CaveType::GREY_CAVE;
         generators.clear();
         crushers.clear();
         washers.clear();
         centrifuges.clear();
+        sorters.clear();
+        electrolyzers.clear();
+        chemBenches.clear();
+        gemDemand.clear();
         poweredMachines.clear();
         investmentMarket = InvestmentMarket{};
         machineMeta.clear();
@@ -3383,9 +3878,13 @@ private:
         struct CatInfo { string key; string label; Color color; };
         vector<CatInfo> cats = {
             { "ore",      "ORES / MINERALS",   Color::Yellow },
+            { "basic",    "BASIC / RAW",       Color::BlueLight },
             { "fuel",     "FUELS",              Color::Red },
             { "material", "MATERIALS",          Color::Cyan },
             { "product",  "STEEL PARTS",        Color::Green },
+            { "element",  "ELEMENTS",           Color::CyanLight },
+            { "compound", "COMPOUNDS",          Color::GreenLight },
+            { "gem",      "GEMS / GEMSTONES",   Color::MagentaLight },
             { "blueprint","BLUEPRINTS",         Color::Magenta },
             { "misc",     "MISC",               Color::GrayDark },
         };
@@ -3536,6 +4035,22 @@ private:
         cls();
     }
 
+    // 刷新本轮商人宝石需求：8 种低品级常驻 + 从 12 种高品级随机抽 3 种
+    void refreshGemDemand() {
+        gemDemand.clear();
+        for (auto& b : gemBaseNames()) {
+            gemDemand.insert("broken_" + b);
+            gemDemand.insert(b + "_dust");
+        }
+        vector<string> pool = highGradeGemPool();
+        for (int i = (int)pool.size() - 1; i > 0; --i) {
+            int j = rand() % (i + 1);
+            swap(pool[i], pool[j]);
+        }
+        for (int i = 0; i < 3 && i < (int)pool.size(); ++i)
+            gemDemand.insert(pool[i]);
+    }
+
     // 交易系统（FTXUI 图形化界面）
     void trade() {
         HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -3544,9 +4059,13 @@ private:
         cursorInfo.bVisible = false;
         SetConsoleCursorInfo(hConsole, &cursorInfo);
 
+        // 每次打开 T 重新挂出本轮收购需求
+        refreshGemDemand();
         auto screen = ScreenInteractive::Fullscreen();
         TradeUI tradeUI(player, screen, gen_blueprint_unlocked, wire_blueprint_unlocked,
-                        crusher_blueprint_unlocked, washer_blueprint_unlocked, centrifuge_blueprint_unlocked);
+                        crusher_blueprint_unlocked, washer_blueprint_unlocked,
+                        centrifuge_blueprint_unlocked, sorter_blueprint_unlocked,
+                        electrolyzer_blueprint_unlocked, chembench_blueprint_unlocked, gemDemand);
         screen.Loop(tradeUI.getComponent());
 
         cursorInfo.bVisible = true;
@@ -3773,6 +4292,9 @@ private:
             setcolor(COLOR_YELLOW);   cout << "X=Crusher  ";
             setcolor(COLOR_CYAN);     cout << "W=Washer  ";
             setcolor(COLOR_PURPLE);   cout << "R=Centrifuge  ";
+            setcolor(COLOR_LIGHT_WHITE); cout << "S=Gem_Sorter  ";
+            setcolor(COLOR_CYAN);       cout << "Z=Electrolyzer  ";
+            setcolor(COLOR_GREEN);      cout << "K=Chem_Bench  ";
             setcolor(COLOR_BLUE);     cout << "+=Wire  ";
             setcolor(COLOR_YELLOW);   cout << "C=Car(travel)";
         } else if (currentArea == Area::Wasteland) {
@@ -3836,6 +4358,7 @@ private:
             }
             setcolor(COLOR_CYAN);   cout << "O=Cave_exit  |  ";
             setcolor(COLOR_DARK_RED); cout << "Ore: Hematite/Magnetite/Bauxite/Tin/Malachite/Chalcopyrite/Gold/Silver/Coal";
+            setcolor(COLOR_LIGHT_WHITE); cout << "  GEMS(rare): j=Sapphire y=Ruby e=Emerald d=Diamond";
         }
         cout << "\n";
         setcolor(COLOR_RESET);
@@ -4043,6 +4566,18 @@ private:
                     openCentrifugeUI(mpos.first, mpos.second);
                     return;
                 }
+                if (currentArea == Area::Home && findNearbyMachine('S', player.x, player.y, mpos)) {
+                    openSorterUI(mpos.first, mpos.second);
+                    return;
+                }
+                if (currentArea == Area::Home && findNearbyMachine('Z', player.x, player.y, mpos)) {
+                    openElectrolyzerUI(mpos.first, mpos.second);
+                    return;
+                }
+                if (currentArea == Area::Home && findNearbyMachine('K', player.x, player.y, mpos)) {
+                    openChemBenchUI(mpos.first, mpos.second);
+                    return;
+                }
             }
             for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) {
                 if (abs(dx) + abs(dy) == 1 && gameMap.getTile(player.x + dx, player.y + dy).mineral != "") {
@@ -4138,6 +4673,7 @@ private:
             if (d == '+') return true;
             if (d == 'F' || d == 'f' || d == 'L' || d == 'l' || d == 'G' || d == 'g') return true;
             if (d == 'X' || d == 'x' || d == 'W' || d == 'w' || d == 'R' || d == 'r') return true;
+            if (d == 'S' || d == 's' || d == 'Z' || d == 'z' || d == 'K' || d == 'k') return true;
             return false;
         };
 
@@ -4157,7 +4693,8 @@ private:
         // 4) 对于每个 F/L 机器，如果它的 4 格中有任何 1 格被 BFS visit 过，则认为通电
         for (auto& m : machineMeta) {
             if (m.type == 'F' || m.type == 'L' || m.type == 'G' ||
-                m.type == 'X' || m.type == 'W' || m.type == 'R') {
+                m.type == 'X' || m.type == 'W' || m.type == 'R' ||
+                m.type == 'S' || m.type == 'Z') {
                 for (int dy = 0; dy < 2; ++dy) for (int dx = 0; dx < 2; ++dx) {
                     if (visited.count({ m.x + dx, m.y + dy })) {
                         poweredMachines.insert({ m.x, m.y });
@@ -4285,6 +4822,66 @@ private:
         return true;
     }
 
+    // 放置 OreSorter 宝石筛选机（2×2，'S'/'s'，白/灰，180c，6 EU）
+    bool placeSorter(int x, int y) {
+        if (currentArea != Area::Home) return false;
+        if (!sorter_blueprint_unlocked) return false;
+        if (player.coins < 180) return false;
+        const int W = gameMap.getWidth(), H = gameMap.getHeight();
+        if (x < 0 || x + 1 >= W || y < 0 || y + 1 >= H) return false;
+        for (int dy = 0; dy < 2; ++dy) for (int dx = 0; dx < 2; ++dx) {
+            if (gameMap.getTile(x + dx, y + dy).display != '.') return false;
+        }
+        player.coins -= 180;
+        gameMap.getTile(x, y) = { 'S', "Gem Sorter", "Sorts crushed gems by grade (6 EU)", false, COLOR_LIGHT_WHITE };
+        gameMap.getTile(x, y + 1) = { 's', "Gem Sorter", "", false, COLOR_GREY };
+        gameMap.getTile(x + 1, y) = { 's', "Gem Sorter", "", false, COLOR_GREY };
+        gameMap.getTile(x + 1, y + 1) = { 's', "Gem Sorter", "", false, COLOR_GREY };
+        sorters[{x, y}] = OreSorter{};
+        machineMeta.push_back({ x, y, 'S', 0, 0, false });
+        return true;
+    }
+
+    // 放置 Electrolyzer 电解机（2×2，'Z'/'z'，青/暗青，250c，10 EU）
+    bool placeElectrolyzer(int x, int y) {
+        if (currentArea != Area::Home) return false;
+        if (!electrolyzer_blueprint_unlocked) return false;
+        if (player.coins < 250) return false;
+        const int W = gameMap.getWidth(), H = gameMap.getHeight();
+        if (x < 0 || x + 1 >= W || y < 0 || y + 1 >= H) return false;
+        for (int dy = 0; dy < 2; ++dy) for (int dx = 0; dx < 2; ++dx) {
+            if (gameMap.getTile(x + dx, y + dy).display != '.') return false;
+        }
+        player.coins -= 250;
+        gameMap.getTile(x, y) = { 'Z', "Electrolyzer", "Electrolyzes compounds to elements (10 EU)", false, COLOR_CYAN };
+        gameMap.getTile(x, y + 1) = { 'z', "Electrolyzer", "", false, COLOR_DARK_CYAN };
+        gameMap.getTile(x + 1, y) = { 'z', "Electrolyzer", "", false, COLOR_DARK_CYAN };
+        gameMap.getTile(x + 1, y + 1) = { 'z', "Electrolyzer", "", false, COLOR_DARK_CYAN };
+        electrolyzers[{x, y}] = Electrolyzer{};
+        machineMeta.push_back({ x, y, 'Z', 0, 0, false });
+        return true;
+    }
+
+    // 放置 ChemistryBench 化合台（2×2，'K'/'k'，绿/暗绿，120c，不耗电）
+    bool placeChemBench(int x, int y) {
+        if (currentArea != Area::Home) return false;
+        if (!chembench_blueprint_unlocked) return false;
+        if (player.coins < 120) return false;
+        const int W = gameMap.getWidth(), H = gameMap.getHeight();
+        if (x < 0 || x + 1 >= W || y < 0 || y + 1 >= H) return false;
+        for (int dy = 0; dy < 2; ++dy) for (int dx = 0; dx < 2; ++dx) {
+            if (gameMap.getTile(x + dx, y + dy).display != '.') return false;
+        }
+        player.coins -= 120;
+        gameMap.getTile(x, y) = { 'K', "Chemistry Bench", "Combines elements into compounds", false, COLOR_GREEN };
+        gameMap.getTile(x, y + 1) = { 'k', "Chemistry Bench", "", false, COLOR_DARK_GREEN };
+        gameMap.getTile(x + 1, y) = { 'k', "Chemistry Bench", "", false, COLOR_DARK_GREEN };
+        gameMap.getTile(x + 1, y + 1) = { 'k', "Chemistry Bench", "", false, COLOR_DARK_GREEN };
+        chemBenches[{x, y}] = ChemistryBench{};
+        machineMeta.push_back({ x, y, 'K', 0, 0, false });
+        return true;
+    }
+
     // 从 machineMeta 重建机器/电线 tile 显示。
     // 修复：travelTo / E 键切回 Home 时 generate(Home) 会把整个地图重置为 '.' 并重随机装饰，
     // 但不会从 machineMeta 反向 stamp 玩家放置的 G/X/W/R/+ —— 导致"幽灵方块"
@@ -4298,6 +4895,9 @@ private:
             {'X','x',"Crusher",         COLOR_YELLOW,   COLOR_DARK_YELLOW},
             {'W','w',"Ore Washer",      COLOR_CYAN,     COLOR_DARK_CYAN},
             {'R','r',"Centrifuge",      COLOR_PURPLE,   COLOR_DARK_PURPLE},
+            {'S','s',"Gem Sorter",      COLOR_LIGHT_WHITE, COLOR_GREY},
+            {'Z','z',"Electrolyzer",    COLOR_CYAN,        COLOR_DARK_CYAN},
+            {'K','k',"Chemistry Bench", COLOR_GREEN,       COLOR_DARK_GREEN},
             {'F','f',"Blast Furnace",   COLOR_RED,      COLOR_DARK_RED},
             {'L','l',"Lathe",           COLOR_PURPLE,  COLOR_DARK_PURPLE},
         };
@@ -4387,6 +4987,21 @@ private:
             cf.setHasPowerThisTick(processing ? powerDraw(8, kv.first) : true);
             cf.update(player, 100);
         }
+        // Gem Sorters：单槽，加工中扣 6 EU
+        for (auto& kv : sorters) {
+            auto& st = kv.second;
+            bool processing = (st.getAnimState() != OreSorter::Idle && st.getAnimState() != OreSorter::Done);
+            st.setHasPowerThisTick(processing ? powerDraw(6, kv.first) : true);
+            st.update(player, 100);
+        }
+        // Electrolyzers：单槽，加工中扣 10 EU
+        for (auto& kv : electrolyzers) {
+            auto& el = kv.second;
+            bool processing = (el.getAnimState() != Electrolyzer::Idle && el.getAnimState() != Electrolyzer::Done);
+            el.setHasPowerThisTick(processing ? powerDraw(10, kv.first) : true);
+            el.update(player, 100);
+        }
+        // Chemistry Benches：不耗电，无需 tick
     }
 
 public:
@@ -4478,6 +5093,12 @@ public:
                 + (washer_blueprint_unlocked ? "" : "  [LOCKED: buy BP first]"));
             placeEntries.push_back(string("  Centrifuge (2x2, 200c)")
                 + (centrifuge_blueprint_unlocked ? "" : "  [LOCKED: buy BP first]"));
+            placeEntries.push_back(string("  Gem Sorter (2x2, 180c)")
+                + (sorter_blueprint_unlocked ? "" : "  [LOCKED: buy BP first]"));
+            placeEntries.push_back(string("  Electrolyzer (2x2, 250c)")
+                + (electrolyzer_blueprint_unlocked ? "" : "  [LOCKED: buy BP first]"));
+            placeEntries.push_back(string("  Chemistry Bench (2x2, 120c)")
+                + (chembench_blueprint_unlocked ? "" : "  [LOCKED: buy BP first]"));
             placeEntries.push_back("  Flower (1c)");
             placeEntries.push_back("  Grass tuft (1c)");
             if (placeSelection >= (int)placeEntries.size()) placeSelection = (int)placeEntries.size() - 1;
@@ -4531,12 +5152,36 @@ public:
                 } else { statusMsg = "Space is already occupied or impassable."; }
                 break;
             case 5:
+                if (!sorter_blueprint_unlocked) { statusMsg = "Gem Sorter blueprint required. Buy it from Trade > BUY."; return; }
+                if (player.coins < 180) { statusMsg = "Need 180 coins."; return; }
+                if (placeSorter(px, py)) {
+                    statusMsg = "Gem Sorter installed at (" + to_string(px) + "," + to_string(py) + ").";
+                    rebuildPlaceEntries();
+                } else { statusMsg = "Space is already occupied or impassable."; }
+                break;
+            case 6:
+                if (!electrolyzer_blueprint_unlocked) { statusMsg = "Electrolyzer blueprint required. Buy it from Trade > BUY."; return; }
+                if (player.coins < 250) { statusMsg = "Need 250 coins."; return; }
+                if (placeElectrolyzer(px, py)) {
+                    statusMsg = "Electrolyzer installed at (" + to_string(px) + "," + to_string(py) + ").";
+                    rebuildPlaceEntries();
+                } else { statusMsg = "Space is already occupied or impassable."; }
+                break;
+            case 7:
+                if (!chembench_blueprint_unlocked) { statusMsg = "Chemistry Bench blueprint required. Buy it from Trade > BUY."; return; }
+                if (player.coins < 120) { statusMsg = "Need 120 coins."; return; }
+                if (placeChemBench(px, py)) {
+                    statusMsg = "Chemistry Bench installed at (" + to_string(px) + "," + to_string(py) + ").";
+                    rebuildPlaceEntries();
+                } else { statusMsg = "Space is already occupied or impassable."; }
+                break;
+            case 8:
                 if (player.coins < 1) { statusMsg = "Need 1 coin."; return; }
                 if (placeDecor(px, py, '*')) {
                     statusMsg = "Planted a flower at (" + to_string(px) + "," + to_string(py) + ").";
                 } else { statusMsg = "Blocked."; }
                 break;
-            case 6:
+            case 9:
                 if (player.coins < 1) { statusMsg = "Need 1 coin."; return; }
                 if (placeDecor(px, py, 'v')) {
                     statusMsg = "Planted grass tuft at (" + to_string(px) + "," + to_string(py) + ").";
@@ -4570,6 +5215,9 @@ public:
                     else if (d == 'X' || d == 'x') col = Color::Yellow;
                     else if (d == 'W' || d == 'w') col = Color::Cyan;
                     else if (d == 'R' || d == 'r') col = Color::MagentaLight;
+                    else if (d == 'S' || d == 's') col = Color::White;
+                    else if (d == 'Z' || d == 'z') col = Color::Cyan;
+                    else if (d == 'K' || d == 'k') col = Color::Green;
                     else if (d == 'C') col = Color::Yellow;
                     else col = Color::White;
                     auto cell = text(string(1, d == '#' ? ' ' : d)) | color(col) | center;
@@ -4602,6 +5250,12 @@ public:
                     | color(washer_blueprint_unlocked ? Color::Green : Color::Red),
                 text("   Centrifuge BP:  " + string(centrifuge_blueprint_unlocked ? "OWNED" : "LOCKED [300c]"))
                     | color(centrifuge_blueprint_unlocked ? Color::Green : Color::Red),
+                text("   Gem Sorter BP:  " + string(sorter_blueprint_unlocked ? "OWNED" : "LOCKED [220c]"))
+                    | color(sorter_blueprint_unlocked ? Color::Green : Color::Red),
+                text("   Electrolyzer BP:" + string(electrolyzer_blueprint_unlocked ? "OWNED" : "LOCKED [300c]"))
+                    | color(electrolyzer_blueprint_unlocked ? Color::Green : Color::Red),
+                text("   Chem Bench BP:  " + string(chembench_blueprint_unlocked ? "OWNED" : "LOCKED [180c]"))
+                    | color(chembench_blueprint_unlocked ? Color::Green : Color::Red),
             }) | border;
         });
 
@@ -5178,6 +5832,364 @@ public:
         cursorInfo.bVisible = true;
         SetConsoleCursorInfo(hConsole, &cursorInfo);
         message = "& Centrifuge panel closed.";
+        cls();
+    }
+
+    // ===== openSorterUI：宝石筛选机面板（1 crushed_gem → ROLL 品级 + 20% rare_dust）=====
+    void openSorterUI(int sx, int sy) {
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        CONSOLE_CURSOR_INFO cursorInfo;
+        GetConsoleCursorInfo(hConsole, &cursorInfo);
+        cursorInfo.bVisible = false;
+        SetConsoleCursorInfo(hConsole, &cursorInfo);
+
+        auto screen = ScreenInteractive::Fullscreen();
+        auto it = sorters.find({ sx, sy });
+        if (it == sorters.end()) {
+            sorters.insert({ {sx, sy}, OreSorter() });
+            it = sorters.find({ sx, sy });
+        }
+        OreSorter& stRef = it->second;
+
+        string statusMsg = "Gem Sorter at (" + to_string(sx) + "," + to_string(sy) + ").";
+        int selRec = stRef.getSelectedRecipe();
+        vector<string> recipeLabels = stRef.getRecipeList();
+
+        Component recipeList = Radiobox(&recipeLabels, &selRec);
+        Component buttonLoad = Button("LOAD CRUSHED", [&] {
+            stRef.setSelectedRecipe(selRec);
+            if (stRef.loadMaterials(player)) statusMsg = "Loaded. Sorting...";
+            else statusMsg = "Cannot load (busy or no crushed gem).";
+        });
+        Component buttonCollect = Button("COLLECT", [&] {
+            string grade = stRef.getLastGrade();
+            int rare = stRef.getLastRareAmount();
+            if (stRef.collect(player)) {
+                statusMsg = "Collected: " + grade + " x1.";
+                if (rare > 0) statusMsg += "  Bonus: rare_dust x1!";
+            } else statusMsg = "Nothing to collect.";
+        });
+        Component buttonClose = Button("CLOSE", [&] { screen.ExitLoopClosure()(); });
+
+        auto buttons = Container::Vertical({ buttonLoad, buttonCollect, buttonClose });
+        auto layout = Container::Vertical({ recipeList, buttons });
+
+        Component view = Renderer(layout, [&] {
+            stRef.setSelectedRecipe(selRec);
+            int pct = stRef.getProgress();
+            const int barW = 30;
+            int fill = (pct * barW) / 100;
+            string barFill(fill, '#'), barSpace(barW - fill, '-');
+            string stateStr = "IDLE";
+            Color barCol = Color::GrayDark;
+            if (stRef.getAnimState() == OreSorter::Sorting) {
+                stateStr = stRef.getHasPowerThisTick() ? "SORTING" : "PAUSED (no power)";
+                barCol = stRef.getHasPowerThisTick() ? Color::White : Color::Red;
+            } else if (stRef.getAnimState() == OreSorter::Done) {
+                stateStr = "DONE - COLLECT";
+                barCol = Color::Green;
+            }
+            // 简易闪烁动画（8 帧）
+            int f = stRef.getFrameIndex() % 8;
+            vector<string> sortArt = {
+                "      .---------.      ",
+                "     / o  o  o  /|     ",
+                "    /  o  o  o / |     ",
+                "   |   o  o  o|  |     ",
+                "   |  o  o  o | .'     ",
+                "    \\ o  o  o /        ",
+                "     '_______'         ",
+                "     GEM  SORTER       "
+            };
+            Elements artElems;
+            for (int i = 0; i < 4; ++i) {
+                int idx = (f + i) % (int)sortArt.size();
+                artElems.push_back(text(sortArt[idx]) | color(Color::White));
+            }
+
+            string lastStr = "  (none yet)";
+            if (stRef.getAnimState() == OreSorter::Done && !stRef.getLastGrade().empty()) {
+                lastStr = "  " + stRef.getLastGrade() + " x1";
+                if (stRef.getLastRareAmount() > 0) lastStr += " + rare_dust x1";
+            }
+
+            return vbox({
+                text("       # GEM SORTER [S] #  @(" + to_string(sx) + "," + to_string(sy) + ")") | bold | color(Color::White),
+                separator(),
+                hbox({
+                    vbox({
+                        text(" RECIPES") | bold | color(Color::Cyan),
+                        separator(),
+                        recipeList->Render() | flex,
+                    }) | size(WIDTH, GREATER_THAN, 42) | flex,
+                    separator(),
+                    vbox({
+                        text(" STATUS") | bold | color(Color::Cyan),
+                        separator(),
+                        text("  State: " + stateStr) | color(barCol),
+                        text("  [" + barFill + barSpace + "] ") | color(barCol),
+                        text("  " + to_string(pct) + "%"),
+                        separator(),
+                        text("  EU Pool: " + to_string(globalEU) + " / 10000") | color(Color::Cyan),
+                        text("  Power: 6 EU/tick when sorting") | color(Color::GrayDark),
+                        separator(),
+                        text(" GRADE ODDS") | bold | color(Color::Yellow),
+                        text("  Perfect  2%  ") | color(Color::MagentaLight),
+                        text("  Flawless 8%  ") | color(Color::Cyan),
+                        text("  Rough   35%  ") | color(Color::Green),
+                        text("  Broken  30%  ") | color(Color::GrayLight),
+                        text("  Dust    25%  ") | color(Color::GrayDark),
+                        text("  +20% rare_dust") | color(Color::Yellow),
+                        separator(),
+                        text(" LAST RESULT") | bold,
+                        text(lastStr) | color(Color::Green),
+                    }) | size(WIDTH, EQUAL, 36),
+                }),
+                separator(),
+                buttons->Render() | center,
+                separator(),
+                text(statusMsg) | color(Color::Green),
+            }) | border | size(WIDTH, GREATER_THAN, 86);
+        });
+
+        atomic<bool> uiRunning{ true };
+        view = view | CatchEvent([&](Event e) {
+            if (e == Event::Escape) { uiRunning.store(false); screen.ExitLoopClosure()(); return true; }
+            if (e == Event::Custom) { return true; }
+            return false;
+        });
+
+        thread ticker([&]() {
+            while (uiRunning.load()) {
+                this_thread::sleep_for(chrono::milliseconds(100));
+                if (!uiRunning.load()) break;
+                globalTick100ms();
+                try { screen.PostEvent(Event::Custom); } catch (...) { break; }
+            }
+        });
+
+        screen.Loop(view);
+        uiRunning.store(false);
+        if (ticker.joinable()) ticker.join();
+
+        cursorInfo.bVisible = true;
+        SetConsoleCursorInfo(hConsole, &cursorInfo);
+        message = "& Gem Sorter panel closed.";
+        cls();
+    }
+
+    // ===== openElectrolyzerUI：电解机面板（1 化合物 → 多元素，10 EU，8s）=====
+    void openElectrolyzerUI(int zx, int zy) {
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        CONSOLE_CURSOR_INFO cursorInfo;
+        GetConsoleCursorInfo(hConsole, &cursorInfo);
+        cursorInfo.bVisible = false;
+        SetConsoleCursorInfo(hConsole, &cursorInfo);
+
+        auto screen = ScreenInteractive::Fullscreen();
+        auto it = electrolyzers.find({ zx, zy });
+        if (it == electrolyzers.end()) {
+            electrolyzers.insert({ {zx, zy}, Electrolyzer() });
+            it = electrolyzers.find({ zx, zy });
+        }
+        Electrolyzer& elRef = it->second;
+
+        string statusMsg = "Electrolyzer at (" + to_string(zx) + "," + to_string(zy) + ").";
+        int selRec = elRef.getSelectedRecipe();
+        vector<string> recipeLabels = elRef.getRecipeList();
+
+        Component recipeList = Radiobox(&recipeLabels, &selRec);
+        Component buttonLoad = Button("LOAD COMPOUND", [&] {
+            elRef.setSelectedRecipe(selRec);
+            if (elRef.loadMaterials(player)) statusMsg = "Loaded. Electrolyzing...";
+            else statusMsg = "Cannot load (busy or missing inputs).";
+        });
+        Component buttonCollect = Button("COLLECT", [&] {
+            if (elRef.collect(player)) statusMsg = "Collected elements.";
+            else statusMsg = "Nothing to collect.";
+        });
+        Component buttonClose = Button("CLOSE", [&] { screen.ExitLoopClosure()(); });
+
+        auto buttons = Container::Vertical({ buttonLoad, buttonCollect, buttonClose });
+        auto layout = Container::Vertical({ recipeList, buttons });
+
+        Component view = Renderer(layout, [&] {
+            elRef.setSelectedRecipe(selRec);
+            int pct = elRef.getProgress();
+            const int barW = 30;
+            int fill = (pct * barW) / 100;
+            string barFill(fill, '#'), barSpace(barW - fill, '-');
+            string stateStr = "IDLE";
+            Color barCol = Color::GrayDark;
+            if (elRef.getAnimState() == Electrolyzer::Electrolyzing) {
+                stateStr = elRef.getHasPowerThisTick() ? "ELECTROLYZING" : "PAUSED (no power)";
+                barCol = elRef.getHasPowerThisTick() ? Color::Cyan : Color::Red;
+            } else if (elRef.getAnimState() == Electrolyzer::Done) {
+                stateStr = "DONE - COLLECT";
+                barCol = Color::Green;
+            }
+            int f = elRef.getFrameIndex() % 8;
+            vector<string> elecArt = {
+                "    _.-'''''-._    ",
+                "   /  |     |  \\   ",
+                "  |   | ~ ~ |   |  ",
+                "  |   |~ ~ ~|   |  ",
+                "  |   | ~ ~ |   |  ",
+                "   \\  |_____|  /   ",
+                "    '-._____.-'    ",
+                "   ELECTROLYZER    "
+            };
+            Elements artElems;
+            for (int i = 0; i < 4; ++i) {
+                int idx = (f + i) % (int)elecArt.size();
+                artElems.push_back(text(elecArt[idx]) | color(Color::CyanLight));
+            }
+
+            return vbox({
+                text("       # ELECTROLYZER [Z] #  @(" + to_string(zx) + "," + to_string(zy) + ")") | bold | color(Color::Cyan),
+                separator(),
+                hbox({
+                    vbox({
+                        text(" RECIPES") | bold | color(Color::Cyan),
+                        separator(),
+                        recipeList->Render() | flex,
+                    }) | size(WIDTH, GREATER_THAN, 46) | flex,
+                    separator(),
+                    vbox({
+                        text(" STATUS") | bold | color(Color::Cyan),
+                        separator(),
+                        text("  State: " + stateStr) | color(barCol),
+                        text("  [" + barFill + barSpace + "] ") | color(barCol),
+                        text("  " + to_string(pct) + "%"),
+                        separator(),
+                        text("  EU Pool: " + to_string(globalEU) + " / 10000") | color(Color::Cyan),
+                        text("  Power: 10 EU/tick when running") | color(Color::GrayDark),
+                        separator(),
+                        text(" ANIMATION") | bold | color(Color::Cyan),
+                        vbox(artElems) | border,
+                    }) | size(WIDTH, EQUAL, 36),
+                }),
+                separator(),
+                buttons->Render() | center,
+                separator(),
+                text(statusMsg) | color(Color::Green),
+            }) | border | size(WIDTH, GREATER_THAN, 88);
+        });
+
+        atomic<bool> uiRunning{ true };
+        view = view | CatchEvent([&](Event e) {
+            if (e == Event::Escape) { uiRunning.store(false); screen.ExitLoopClosure()(); return true; }
+            if (e == Event::Custom) { return true; }
+            return false;
+        });
+
+        thread ticker([&]() {
+            while (uiRunning.load()) {
+                this_thread::sleep_for(chrono::milliseconds(100));
+                if (!uiRunning.load()) break;
+                globalTick100ms();
+                try { screen.PostEvent(Event::Custom); } catch (...) { break; }
+            }
+        });
+
+        screen.Loop(view);
+        uiRunning.store(false);
+        if (ticker.joinable()) ticker.join();
+
+        cursorInfo.bVisible = true;
+        SetConsoleCursorInfo(hConsole, &cursorInfo);
+        message = "& Electrolyzer panel closed.";
+        cls();
+    }
+
+    // ===== openChemBenchUI：化合台面板（多元素 → 1 化合物，不耗电）=====
+    void openChemBenchUI(int kx, int ky) {
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        CONSOLE_CURSOR_INFO cursorInfo;
+        GetConsoleCursorInfo(hConsole, &cursorInfo);
+        cursorInfo.bVisible = false;
+        SetConsoleCursorInfo(hConsole, &cursorInfo);
+
+        auto screen = ScreenInteractive::Fullscreen();
+        auto it = chemBenches.find({ kx, ky });
+        if (it == chemBenches.end()) {
+            chemBenches.insert({ {kx, ky}, ChemistryBench() });
+            it = chemBenches.find({ kx, ky });
+        }
+        ChemistryBench& cbRef = it->second;
+
+        string statusMsg = "Chemistry Bench at (" + to_string(kx) + "," + to_string(ky) + ").";
+        int selRec = 0;
+        vector<string> recipeLabels = cbRef.getRecipeList();
+
+        Component recipeList = Menu(&recipeLabels, &selRec);
+        Component buttonCraft = Button("CRAFT", [&] {
+            if (cbRef.craft(player, selRec)) {
+                statusMsg = "Synthesized " + cbRef.getRecipe(selRec).outputName + ".";
+            } else {
+                statusMsg = "Cannot craft (missing ingredients).";
+            }
+        });
+        Component buttonClose = Button("CLOSE", [&] { screen.ExitLoopClosure()(); });
+
+        auto buttons = Container::Vertical({ buttonCraft, buttonClose });
+        auto layout = Container::Vertical({ recipeList, buttons });
+
+        Component view = Renderer(layout, [&] {
+            const ChemistryBench::Recipe* r = (selRec >= 0 && selRec < cbRef.getRecipeCount())
+                ? &cbRef.getRecipe(selRec) : nullptr;
+            Elements detailElems;
+            if (r) {
+                detailElems.push_back(text("  Output: " + r->outputName + " x" + to_string(r->outputAmount)) | bold);
+                detailElems.push_back(text("  Ingredients:") | color(Color::Cyan));
+                for (auto& in : r->inputs) {
+                    int have = 0;
+                    for (auto& it : player.inventory) if (it.name == in.first) { have = it.quantity; break; }
+                    bool ok = have >= in.second;
+                    detailElems.push_back(text("    " + in.first + " x" + to_string(in.second) +
+                        "  (have " + to_string(have) + ")") | color(ok ? Color::Green : Color::Red));
+                }
+            } else {
+                detailElems.push_back(text("  No recipe selected."));
+            }
+
+            return vbox({
+                text("       # CHEMISTRY BENCH [K] #  @(" + to_string(kx) + "," + to_string(ky) + ")") | bold | color(Color::Green),
+                separator(),
+                hbox({
+                    vbox({
+                        text(" RECIPES") | bold | color(Color::Cyan),
+                        separator(),
+                        recipeList->Render() | flex,
+                    }) | size(WIDTH, GREATER_THAN, 46) | flex,
+                    separator(),
+                    vbox({
+                        text(" DETAILS") | bold | color(Color::Cyan),
+                        separator(),
+                        vbox(detailElems) | border,
+                        separator(),
+                        text("  No power required.") | color(Color::GrayDark),
+                    }) | size(WIDTH, EQUAL, 36),
+                }),
+                separator(),
+                buttons->Render() | center,
+                separator(),
+                text(statusMsg) | color(Color::Green),
+            }) | border | size(WIDTH, GREATER_THAN, 88);
+        });
+
+        atomic<bool> uiRunning{ true };
+        view = view | CatchEvent([&](Event e) {
+            if (e == Event::Escape) { uiRunning.store(false); screen.ExitLoopClosure()(); return true; }
+            return false;
+        });
+
+        screen.Loop(view);
+        uiRunning.store(false);
+
+        cursorInfo.bVisible = true;
+        SetConsoleCursorInfo(hConsole, &cursorInfo);
+        message = "& Chemistry Bench panel closed.";
         cls();
     }
 

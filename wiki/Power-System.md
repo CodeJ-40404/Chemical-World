@@ -1,156 +1,134 @@
-# Power System
+# Power System / 电力系统
 
-电力网络详解。灵感来自 GT:New Horizons 的简化 EU 模型。
+> **EN:** Simplified GT:NH-style EU model: thermal generators inject energy into one shared 0–10,000 EU pool; wires decide *which* machines are connected via a per-tick BFS; machines draw from the pool and pause when they cannot.
+> **中文：** 简化的 GT:NH 风格 EU 模型：发电机向一个 0–10,000 的共享 EU 池注入能量；每 tick 的 BFS 决定哪些机器与电网连通；机器从池中扣电，扣不到就暂停。
 
 ---
 
-## ⚡ 核心概念
-
-游戏采用**单一共享 EU 池**模型：
+## ⚡ Core model / 核心模型
 
 ```
             ┌─────────────────────────────┐
             │   global EU Pool (0~10000)  │
             └─────────────────────────────┘
                   ▲              │
-        注入 ≤8/tick             │ 扣减 (powerDraw)
+        inject ≤8/tick           │ powerDraw(eu, xy)
                   │              ▼
-        ┌─────────────────┐  ┌──────────────┐
-        │ 火力发电机 G     │  │ 车床 L (2EU) │
-        │ (burning coal)  │  │              │
-        └─────────────────┘  └──────────────┘
+        ┌─────────────────┐  ┌──────────────────────────┐
+        │ Generator G     │  │ L 2 · W 2 · X 4/slot     │
+        │ (burns coal)    │  │ S 6 · R 8 · Z 10 EU/tick │
+        └─────────────────┘  └──────────────────────────┘
                   ▲              │
-                  │   电线 +    │
-                  └─── connects ┘
+                  └── wires + + machines are conductive (BFS) ──┘
 ```
 
-- **EU pool**：全局变量 `globalEU`，范围 0~10000，所有发电机共享
-- **发电机**：投煤后燃烧，每 tick（100ms）注入 ≤8 EU 到 pool
-- **机器**：每 tick 从 pool 扣 EU，扣不到就暂停
-- **电线**：连接发电机与机器，决定哪些机器"通电"
+| Concept / 概念 | EN | 中文 |
+|----------------|----|------|
+| EU pool | `globalEU`, shared by every generator, capped at 10,000 | `globalEU`，所有发电机共享，上限 10,000 |
+| Generator | burns one coal = 6,400 EU, injects ≤8 EU/tick (100 ms) | 每煤 6,400 EU，每 tick 注入 ≤8 EU |
+| Machine | calls `powerDraw` while active; failure → paused | 活跃时调用 `powerDraw`；失败→暂停 |
+| Wire | 4-connected conductors; no distance loss | 4 邻接导体；无距离损耗 |
 
 ---
 
-## 🔥 火力发电机
+## 🔥 Generator / 火力发电机（G）
 
-| 属性 | 数值 |
+| Property / 属性 | Value / 数值 |
 |------|------|
-| 尺寸 | 2×2 格（`G` 锚点 + `g` 三个辅助格） |
-| 单次投煤 | 充 6400 EU |
-| 燃烧速度 | 8 EU / tick（100ms） |
-| 单煤总燃烧时间 | 6400 / 8 × 100ms = **80 秒** |
-| 颜色 | `G` 黄色 / `g` 暗黄 |
-| 通行 | 不可通行（4 格都阻挡） |
+| Size / 占地 | 2×2 (`G` anchor + 3 `g` helpers) |
+| Cost / 成本 | BP 150c + 100c per unit / 蓝图 150c + 每台 100c |
+| Per coal / 每煤 | 6,400 EU, 8 EU/tick → **80 s** burn time / 燃烧 80 秒 |
+| Passable / 通行 | no (all 4 tiles block) / 不可 |
 
-### 投煤方法
-
-1. 走到发电机 2×2 区域旁（任何一格的上下左右 4 邻接）
-2. 按 `E`，弹出 GeneratorPanel
-3. 点击 `ADD 1 COAL` 按钮
-4. 消耗背包中 coal ×1，发电机 `burnEU += 6400`，`active = true`
-
-### 多发电机并联
-
-可以放置多台发电机，全部燃烧时总注入速度叠加：
-- 1 台燃烧：+8 EU/tick
-- 2 台燃烧：+16 EU/tick
-- N 台燃烧：+N×8 EU/tick
-
-EU pool 上限 10000，满了就停止注入（不浪费）。
+**EN:** `E` nearby → `ADD 1 COAL`. N burning generators inject N×8 EU/tick; injection stops at the 10,000 cap (nothing is wasted).
+**中文：** 机器旁按 `E` → `ADD 1 COAL`。N 台燃烧中的发电机注入 N×8 EU/tick；池满 10,000 即停注（不浪费）。
 
 ---
 
-## 🔌 电线网络
+## 🔌 Wire network / 电线网络
 
-| 属性 | 数值 |
+| Property / 属性 | Value / 数值 |
 |------|------|
-| 尺寸 | 1×1 格 |
-| 单价 | 5 coins |
-| 字符 | `+`（蓝色） |
-| 通行 | 不可通行 |
-| 连通规则 | 4 邻接（上下左右），无损耗 |
+| Size / 尺寸 | 1×1 |
+| Cost / 单价 | BP 50c + 5c per wire / 蓝图 50c + 每根 5c |
+| Char / 字符 | `+` (blue / 蓝) |
+| Connectivity / 连通 | 4-neighbour, no loss / 4 邻接，无损耗 |
 
-### 导电性判定（BFS）
+### Conductivity BFS / 导电性 BFS
 
-每个 tick，`tickPowerGrid()` 会：
+**EN:** Every tick `tickPowerGrid()` (1) seeds the BFS from every generator's 4 tiles, (2) floods through conductive tiles, (3) registers each reachable machine anchor into `poweredMachines`.
 
-1. 找到所有发电机 2×2 锚点
-2. 从每个锚点开始 BFS，**通过所有导电字符**：
-   ```
-   G g F f L l +
-   ```
-3. 所有 BFS 能到达的机器锚点加入 `poweredMachines` 集合
-4. 调用 `powerDraw(eu, machineXY)` 时检查：机器锚点必须在 `poweredMachines` 里
+**中文：** 每 tick `tickPowerGrid()`：(1) 以每台发电机 4 格作为 BFS 起点，(2) 沿导电字符泛洪，(3) 将可达的机器锚点注册进 `poweredMachines`。
 
-> ⚠️ 注意：电线本身**不是机器**，只是导体。BFS 会从 G 出发经过 `+` 一直走到 F 或 L 锚点。
+Conductive character set / 导电字符集：
+
+```
++  G g  F f  L l  X x  W w  R r  S s  Z z  K k
+```
+
+| Class / 类别 | Chars / 字符 | Registered for powerDraw / 注册耗电 |
+|--------------|--------------|--------------------------------------|
+| Wire / 电线 | `+` | no (conductor only / 仅导体) |
+| Generator / 发电机 | `G`/`g` | self-powered, seeds BFS / 自发电，BFS 起点 |
+| No-power machines / 不耗电机器 | `F`/`f` Furnace, `K`/`k` Chem Bench | conductive but never draw / 导电但不扣电 |
+| Powered machines / 耗电机器 | `L` Lathe, `X` Crusher, `W` Washer, `R` Centrifuge, `S` Sorter, `Z` Electrolyzer | yes / 是 |
+
+> **EN / 中文：** Electricity passes *through* machines, so a chain of adjacent machines needs no wire between them. Decor `*`/`v` and ore chars are insulators.
+> 电可以穿过机器传导，相邻机器串之间无需补线。装饰 `*`/`v` 与矿石字符是绝缘体。
 
 ---
 
-## 🎯 powerDraw 流程
+## 🎯 powerDraw semantics / powerDraw 流程
 
-```
-powerDraw(eu, machineXY):
-  if currentArea != Home: return false
-  if machineXY not in poweredMachines: return false
-  if globalEU < eu: return false
-  globalEU -= eu
-  return true
-```
-
-车床每 tick（Machining/Inserting 状态）调用：
 ```cpp
-lathe.hasPowerThisTick = powerDraw(2, {8, 5});
+powerDraw(eu, machineXY):
+  if currentArea != Home:      return false;  // grid exists only at Home / 电网仅存在于家园
+  if machineXY not in poweredMachines: return false;
+  if globalEU < eu:            return false;  // pool drained / 电量不足
+  globalEU -= eu;
+  return true;
 ```
 
-- 成功扣到 → `hasPowerThisTick = true`，车床正常推进
-- 扣不到 → `hasPowerThisTick = false`，车床进入 paused 状态，进度条变灰，显示 ⚠ PAUSED
+**EN:** Draw values per tick (100 ms) while processing:
+**中文：** 加工中每 tick（100ms）扣电量：
+
+| Machine / 机器 | Draw / 扣电 |
+|----------------|-------------|
+| Lathe `L` | 2 EU |
+| Ore Washer `W` | 2 EU |
+| Crusher `X` | 4 EU **per active slot** / 每活跃槽 |
+| Gem Sorter `S` | 6 EU |
+| Centrifuge `R` | 8 EU |
+| **Electrolyzer `Z`** | **10 EU** |
+| Chemistry Bench `K` | 0 (instant craft / 即时合成) |
+
+**EN:** On failed draw `hasPowerThisTick=false`; the machine's `update()` skips progress and the UI shows `PAUSED (no power)`. Progress is retained and resumes when power returns.
+**中文：** 扣电失败则 `hasPowerThisTick=false`；机器 `update()` 不推进进度，界面显示 `PAUSED (no power)`。进度保留，恢复供电后续跑。
 
 ---
 
-## 🏗️ 完整电力链示例
+## 📊 EU budget / EU 预算参考
 
-```
-玩家出生 (10,5)
-  ↓
-  T 买 Wire Blueprint (50c) + Generator Blueprint (150c)
-  ↓
-  B 进入建造模式
-  ↓
-  在 (15,5) 放 Generator (2×2: G/g, 消耗 100c)
-  ↓
-  沿 (14,5) (13,5) (12,5) (11,5) 铺设 Wire（每个 5c, 共 20c）
-  ↓
-  连到 Lathe 锚点 (8,5)
-  ↓
-  E 走到 G 旁, 投 1 个 coal (burnEU = 6400)
-  ↓
-  E 走到 L 旁, 加工 steel_gear (3s = 30 ticks × 2 EU = 60 EU)
-  ↓
-  EU pool 持续被扣，发电机持续注入，加工完成
-```
-
----
-
-## 📊 EU 预算参考
-
-| 操作 | 持续时间 | 总 EU 消耗 |
+| Operation / 操作 | Duration / 时长 | Total EU / 总耗电 |
 |------|----------|-----------|
-| 加工 steel_gear (3s) | 30 ticks | 60 EU |
-| 加工 steel_rod (2.5s) | 25 ticks | 50 EU |
-| 加工 steel_wire (4s) | 40 ticks | 80 EU |
-| 1 块煤发电 | 80s | 注入 6400 EU |
+| steel_gear (lathe / 车床) | 3 s | 60 |
+| steel_wire (lathe / 车床) | 4 s | 80 |
+| Electrolyzer run / 电解一次 | 8 s | **800** |
+| 1 coal / 1 块煤 | 80 s | injects 6,400 / 注入 6,400 |
 
-> 1 块煤可加工约 100+ 个钢零件，电力通常不紧张。
+**EN:** One coal powers ~8 full electrolysis runs (or 100+ lathe parts).
+**中文：** 1 块煤约支持 8 次完整电解（或 100+ 个车床零件）。
 
 ---
 
-## ⚠️ 常见问题
+## ⚠️ Troubleshooting / 常见问题
 
-**Q：车床一直 PAUSED 怎么办？**
-A：检查 GeneratorPanel 看是否还在 burning。投煤、确认电线连通到 Lathe 锚点 (8,5)。
+**EN:**
+- *Stuck at PAUSED?* Check the GeneratorPanel (still burning?), then trace the 4-connected wire path to the machine's uppercase anchor — one gap breaks BFS; diagonals don't connect.
+- *Generator burning but no power?* Wires must physically touch the generator or another conductive machine; the pool alone isn't enough — the anchor must be in `poweredMachines`.
+- *Multiple machines per generator?* Fine — the pool is shared; only ensure total draw ≤ total injection over time.
 
-**Q：发电机燃烧但车床还是没电？**
-A：电线必须 4 邻接连通，且最终能 BFS 到达 L 锚点。中间断一格就不行。
-
-**Q：可以一个发电机带多台车床吗？**
-A：可以。EU pool 是共享的，只要总消耗 < 总注入就不会断电。
+**中文：**
+- *一直 PAUSED？* 先看 GeneratorPanel（还在烧吗？），再检查到大写锚点的 4 邻接电线——断一格 BFS 即失败，对角不连通。
+- *发电机在烧却没电？* 电线必须物理接触发电机或其他导电机器；只有 EU 池不够，锚点必须进入 `poweredMachines`。
+- *一台发电机带多台机器？* 可以——池是共享的，只需长期总扣电 ≤ 总注入。

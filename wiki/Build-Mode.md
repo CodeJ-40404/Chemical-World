@@ -1,200 +1,109 @@
-# Build Mode
+# Build Mode / 建造模式
 
-建造模式详解。按 `B` 键打开（仅在家园）。
+> **EN:** Press `B` at Home to open the 7×7 zoomed build grid. Home only; other areas show "Can only build at home."
+> **中文：** 在家园按 `B` 打开 7×7 放大建造网格。仅限家园；其他区域提示 "Can only build at home."
 
----
-
-## 🏗️ 入口
-
-- **按键**：`B`（仅 `currentArea == Home` 时可用）
-- **退出**：`ESC` 或点 `CLOSE` 按钮
-
-> 在荒原或矿洞按 B 会提示 "Can only build at home."
+**Entry / 入口：** `B` (Home only) · **Exit / 退出：** `ESC` or CLOSE
 
 ---
 
-## 🖥️ 界面布局
+## 🖥️ Layout / 界面
 
-```
-┌──────────────── # BUILD MODE [B] # ────────────────┐
-│                                                     │
-│  PLACEABLES            ┌────────────────────────┐  │
-│  ───────────           │ Coins: 250c            │  │
-│  > Generator (2x2,100c)│ EU Pool: 6400 / 10000   │  │
-│    Wire (1x1, 5c)      │                        │  │
-│    Flower (1c)         │ Blueprints:             │  │
-│    Grass tuft (1c)     │  Generator BP: OWNED   │  │
-│                        │  Wire BP:      LOCKED   │  │
-│                        └────────────────────────┘  │
-│                                                     │
-│         ┌─────┬─────┬─────┬─────┬─────┐            │
-│         │     │     │     │     │     │            │
-│         ├─────┼─────┼─────┼─────┼─────┤            │
-│         │     │     │     │     │     │            │
-│         ├─────┼─────╔═════╗─────┼─────┤            │
-│         │     │     ║  P  ║     │     │  ← 双线框  │
-│         ├─────┼─────╚═════╝─────┼─────┤    = 玩家  │
-│         │     │     │     │     │     │    脚下    │
-│         ├─────┼─────┼─────┼─────┼─────┤            │
-│         │     │     │     │     │     │            │
-│         └─────┴─────┴─────┴─────┴─────┘            │
-│                                                     │
-│              [PLACE]    [CLOSE]                    │
-│                                                     │
-│  Tip: LEFT item pick type; PLACE puts it at center │
-└─────────────────────────────────────────────────────┘
-```
+**EN:** Left = placeables menu; right = coins, live EU pool, blueprint ownership; bottom = 7×7 preview (center tile has a DOUBLE border = your position = placement target); PLACE / CLOSE buttons.
+**中文：** 左侧=可放置物菜单；右侧=金币、实时 EU 池、蓝图持有状态；底部=7×7 预览（中心格双线框=玩家位置=放置目标）；PLACE / CLOSE 按钮。
 
 ---
 
-## 📐 7×7 放大网格
+## 📐 7×7 grid / 7×7 网格
 
-- **范围**：以玩家脚下为中心的 7×7 区域（dx, dy ∈ [-3, +3]）
-- **中心格**：双线边框 `DOUBLE`，标识"放置位置"（玩家当前脚下）
-- **其他格**：单线边框 `LIGHT`
-- **颜色**：根据 tile display 字符着色
+| EN | 中文 |
+|----|------|
+| Area: dx, dy ∈ [-3, +3] around the player | 范围：以玩家为中心 dx, dy ∈ [-3, +3] |
+| Center tile = DOUBLE border = placement cell | 中心格双线框=放置位置 |
+| Other tiles = LIGHT border, colored by display char | 其他格单线框，按字符着色 |
 
-### 颜色映射
+### Color map / 颜色映射
 
-| 字符 | 含义 | 颜色 |
+| Char / 字符 | Meaning / 含义 | Color / 颜色 |
 |------|------|------|
-| `.` | 草地 | 亮绿 |
-| `~` | 河流 / 湖泊 | 亮蓝 |
-| `*` | 花朵 | 亮紫 |
-| `v` | 草丛 | 绿 |
-| `t` | 树 | 绿 |
-| `+` | 电线 | 亮黄 |
-| `G` / `g` | 发电机 | 亮黄 |
-| `F` / `f` | 高炉 | 亮红 |
-| `L` / `l` | 车床 | 紫 |
-| `C` | Car | 黄 |
-| `#` | 边界 | （显示为空格） |
+| `.` | grass 草地 | bright green 亮绿 |
+| `~` | river/lake 河流湖泊 | blue / dark cyan 蓝/深青 |
+| `*` `v` | flower / grass tuft 花/草丛 | purple / green 紫/绿 |
+| `+` | wire 电线 | blue/yellow 蓝/黄 |
+| `G`/`g` | Generator 发电机 | yellow / dark yellow 黄/暗黄 |
+| `F`/`f` | Furnace 高炉 | red / dark red 红/暗红 |
+| `L`/`l` | Lathe 车床 | purple / dark purple 紫/暗紫 |
+| `X`/`x` | Crusher 破碎机 | yellow / dark yellow |
+| `W`/`w` | Washer 洗矿槽 | cyan / dark cyan 青/暗青 |
+| `R`/`r` | Centrifuge 离心机 | purple / dark purple |
+| `S`/`s` | Gem Sorter 筛选机 | white / grey 白/灰 |
+| `Z`/`z` | **Electrolyzer 电解机** | **cyan / dark cyan 青/暗青** |
+| `K`/`k` | **Chemistry Bench 化合台** | **green / dark green 绿/暗绿** |
 
 ---
 
-## 🛠️ 可放置物
+## 🛠️ Placeables / 可放置物（10）
 
-| 序号 | 名称 | 尺寸 | 价格 | 蓝图要求 | 字符 |
+| Idx / 序号 | Name / 名称 | Size / 尺寸 | Cost / 放置费 | Blueprint / 蓝图 | Char / 字符 |
 |------|------|------|------|----------|------|
-| 0 | Generator | 2×2 | 100c | Generator BP | `G` + `g` |
-| 1 | Wire | 1×1 | 5c | Wire BP | `+` |
-| 2 | Flower | 1×1 | 1c | 无 | `*` |
-| 3 | Grass tuft | 1×1 | 1c | 无 | `v` |
+| 0 | Generator 发电机 | 2×2 | 100c | Generator BP 150c | `G`/`g` |
+| 1 | Wire 电线 | 1×1 | 5c | Wire BP 50c | `+` |
+| 2 | Crusher 破碎机 | 2×2 | 150c | Crusher BP 200c | `X`/`x` |
+| 3 | Ore Washer 洗矿槽 | 2×2 | 120c | Washer BP 160c | `W`/`w` |
+| 4 | Centrifuge 离心机 | 2×2 | 200c | Centrifuge BP 250c | `R`/`r` |
+| 5 | Gem Sorter 宝石筛选机 | 2×2 | 180c | Sorter BP 220c | `S`/`s` |
+| 6 | **Electrolyzer 电解机** | 2×2 | **250c** | **Electrolyzer BP 300c** | `Z`/`z` |
+| 7 | **Chemistry Bench 化合台** | 2×2 | **120c** | **Chem Bench BP 180c** | `K`/`k` |
+| 8 | Flower 花 | 1×1 | 1c | none 无 | `*` |
+| 9 | Grass tuft 草丛 | 1×1 | 1c | none 无 | `v` |
 
-### 锁定状态
+> **EN / 中文：** Menu order and the `tryPlace` case indices are kept in lock-step (0–9). Locked entries show `[LOCKED: buy BP first]`.
+> 菜单顺序与 `tryPlace` 的 case 序号严格一致（0–9）。未解锁显示 `[LOCKED: buy BP first]`。
 
-未购买蓝图时，菜单项显示 `[LOCKED: buy BP first]`，PLACE 会提示：
-```
-Generator blueprint required. Buy it from Trade > BUY.
-```
+### Placement rules / 放置规则
 
----
+**EN:**
+- **2×2 machines:** all 4 tiles must be empty grass (`.`); costs coins; stamps anchor + 3 helpers, sets all impassable, pushes `machineMeta`, creates the runtime instance.
+- **Wire:** target tile must be passable; stamps `+`, impassable.
+- **Flower / grass:** 1c; stamped decor **stays passable** (you can walk on it).
+- Machines cannot be removed after placement.
 
-## 🎯 PLACE 操作
-
-按下 `PLACE` 时，根据当前选中：
-
-### 0. Generator
-
-```cpp
-if (!gen_blueprint_unlocked) → "Generator blueprint required."
-if (coins < 100) → "Need 100 coins."
-if (placeGenerator(px, py)) → "Generator installed at (x,y)."
-else → "Space is already occupied or impassable."
-```
-
-`placeGenerator(x, y)`：
-1. 检查 4 格 `(x,y) (x+1,y) (x,y+1) (x+1,y+1)` 全部 passable
-2. 检查 `gen_blueprint_unlocked && coins >= 100`
-3. 扣 100 coins
-4. 写入 4 格：`(x,y)='G'` 黄色 / 其余 3 格 `'g'` 暗黄
-5. 4 格全部设为 `passable = false`
-6. `machineMeta.push_back({x, y, 'G', 0, 0, false})`
-7. `generators[{x, y}] = PowerGenerator{}`
-
-### 1. Wire
-
-```cpp
-if (!wire_blueprint_unlocked) → "Wire blueprint required."
-if (coins < 5) → "Need 5 coins."
-if (placeWire(px, py)) → "Wire laid at (x,y)."
-else → "Cannot lay wire here."
-```
-
-`placeWire(x, y)`：
-1. 检查 `(x, y)` passable
-2. 检查 `wire_blueprint_unlocked && coins >= 5`
-3. 扣 5 coins
-4. 写入 `'+'` 蓝色，`passable = false`
-
-### 2 / 3. Flower / Grass tuft
-
-```cpp
-if (coins < 1) → "Need 1 coin."
-if (placeDecor(px, py, '*')) → "Planted a flower at (x,y)."
-else → "Blocked."
-```
-
-`placeDecor(x, y, display)`：
-1. 检查 `(x, y)` passable
-2. 扣 1 coin
-3. 写入 `display`（`'*'` 紫色随机 / `'v'` 深绿色）
-4. **保持 `passable = true`**（装饰可踩）
+**中文：**
+- **2×2 机器：** 4 格必须全是空草地（`.`）；扣币；盖印锚点+3 辅助格、全部设为不可通行、写入 `machineMeta` 并创建运行时实例。
+- **电线：** 目标格须可通行；盖印 `+`，不可通行。
+- **花 / 草丛：** 1c；装饰**保持可通行**（可踩踏）。
+- 机器放置后不可拆除。
 
 ---
 
-## ⚡ 100ms Ticker
+## ⚡ 100 ms ticker / 100ms 心跳
 
-BuildUI 内启动一个 ticker 线程，每 100ms 调用 `globalTick100ms()`，会：
-- 推进电力网络（`tickPowerGrid`）
-- 推进土高炉（`furnace.update`）
-- 推进车床（`lathe.update`，含电力检查）
-
-所以**在 BuildUI 里也能看到 EU Pool 实时变化**（投了煤的发电机持续注入）。
+**EN:** BuildUI runs a background ticker, so the EU pool and machine progress update live while the menu is open.
+**中文：** BuildUI 运行后台 ticker，菜单打开期间 EU 池与机器进度实时更新。
 
 ---
 
-## 📋 完整建造流程示例
+## 📋 Worked example / 完整示例
 
-### 目标：在家园放一台发电机并连到车床
+**EN:** Place a generator and power the Lathe:
+**中文：** 放发电机并给车床通电：
 
 ```
-1. T → BUY → Generator Blueprint (150c) → BUY 1
-2. T → BUY → Wire Blueprint (50c) → BUY 1
-3. B 打开建造模式
-4. 走到 (15, 5) 位置
-5. B 重新打开，菜单选 Generator，PLACE
-   → 4 格 (15,5)-(16,6) 变成 G/g，扣 100c
-6. 走到 (14, 5)，菜单选 Wire，PLACE → 扣 5c
-7. 走到 (13, 5)，PLACE Wire → 扣 5c
-8. 重复直到 (11, 5) 都铺上 +
-9. ESC 退出
-10. 走到发电机 (15,5) 旁，按 E → 投煤
-11. EU pool 开始上升
-12. 走到车床 (8,5) 旁，按 E → 加工
+1. T → BUY → Generator Blueprint (150c), Wire Blueprint (50c)
+2. B → select Generator → PLACE at (15,5)   (stamps G/g, -100c)
+3. Walk toward (8,5), PLACE wire on each tile (5c each)
+4. ESC → E on the generator → ADD 1 COAL
+5. E on the Lathe → machining now runs
 ```
 
-电线连通图：
-```
-(15,5)G  ←──  (14,5)+  ←──  (13,5)+  ←──  (12,5)+  ←──  (11,5)+  ←──  (10,5)@player
-                                                                          ↓
-                                                                  (8,5)L lathe 锚点
-```
-
-> 注意 (10,5) 是玩家出生点，玩家离开后该格变回 `.`，电线需要铺到 (9,5) 才能连通到 L 锚点 (8,5)。
+**EN (v0.5.0):** Repeat with Electrolyzer BP (300c) + Chem Bench BP (180c); the Electrolyzer needs the same wire treatment, the bench does not.
+**中文（v0.5.0）：** 电解机蓝图（300c）与化合台蓝图（180c）同理；电解机需要接线，化合台不需要。
 
 ---
 
-## ⚠️ 常见问题
+## ⚠️ FAQ / 常见问题
 
-**Q：为什么放不下 Generator？**
-A：2×2 机器需要 4 格全空。检查放大网格中心十字区域是否都是 `.`（草地）。
-
-**Q：电线铺到玩家身上会怎样？**
-A：玩家位置是动态的，PLACE 时玩家会移动，电线会铺在玩家**脚下当时的位置**。
-
-**Q：可以拆掉机器 / 电线吗？**
-A：目前**不支持拆除**。放置前请确认位置。
-
-**Q：装饰和电线混在一起会导电吗？**
-A：不会。BFS 只通过 `G g F f L l +` 这 6 个字符。`*` 和 `v` 是绝缘体。
+**EN / 中文：**
+- *Cannot place a 2×2?* All four cells must be empty `.` — check the preview. / 4 格必须全是空 `.`，查看预览。
+- *Can wires overlap the player?* Placement resolves at your current tile; move first. / 按当前脚下格放置，请先移动。
+- *Do decor tiles conduct?* No — only `+` and machine chars are conductors. / 不导电，只有 `+` 与机器字符导电。
