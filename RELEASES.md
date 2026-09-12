@@ -5,7 +5,7 @@
 ---
 
 <a id="english"></a>
-# v0.5.0 — Electrolysis Update
+# v1.3.2 — Electrolysis Update
 
 **Release date:** 2026-09-12
 **Save format:** v7 (loads v2–v7)
@@ -176,7 +176,7 @@ These were caught by the pre-release independent review and fixed before tagging
 ---
 
 <a id="中文"></a>
-# v0.5.0 — 电解更新（Electrolysis Update）
+# v1.3.2 — 电解更新（Electrolysis Update）
 
 **发布日期：** 2026-09-12
 **存档格式：** v7（可加载 v2–v7）
