@@ -4,7 +4,7 @@
 [![FTXUI](https://img.shields.io/badge/FTXUI-6.1.9-green.svg)](https://github.com/ArthurSonzogni/FTXUI)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
 [![Save Format](https://img.shields.io/badge/save-v7-brightgreen.svg)](#存档系统)
-[![Release](https://img.shields.io/badge/release-v0.5.0%20Electrolysis-blueviolet.svg)](RELEASES.md)
+[![Release](https://img.shields.io/badge/release-v1.3.2%20Electrolysis-blueviolet.svg)](RELEASES.md)
 
 > A terminal-based interactive industrial sandbox game built with C++20 and FTXUI, inspired by a simplified power network and machine chain from GT:New Horizons. Mine ores → smelt in blast furnace → machine steel parts on lathe → **electrolyze compounds into elements and synthesize chemicals** → sell for coins / assemble more machines. Build your industrial empire.
 >
